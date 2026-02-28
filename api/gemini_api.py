@@ -122,8 +122,8 @@ class GeminiAPI:
         image_config = {}
         if aspect_ratio:
             image_config["aspectRatio"] = aspect_ratio
-        # gemini-3-pro 支持 imageSize 控制输出分辨率
-        if image_size and "pro" in model.lower():
+        # gemini-3-pro 和 gemini-3.1-flash 支持 imageSize 控制输出分辨率
+        if image_size and ("pro" in model.lower() or "3.1-flash" in model.lower()):
             image_config["imageSize"] = image_size
         if image_config:
             generation_config["imageConfig"] = image_config

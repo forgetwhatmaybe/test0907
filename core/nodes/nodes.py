@@ -1690,8 +1690,8 @@ class GeminiAPINode(NodeItem):
         
         self.model_combo = QComboBox()
         self.model_combo.addItems([
-            "gemini-3-pro-image-preview",
             "gemini-3.1-flash-image-preview",
+            "gemini-3-pro-image-preview",
             "gemini-2.5-flash-preview-image-generation",
             "gemini-2.0-flash-preview-image-generation",
         ])
@@ -1806,12 +1806,14 @@ class GeminiAPINode(NodeItem):
         # 默认选中 2K 分辨率
         self.resolution_combo.setCurrentIndex(1)  # "2K"
         
-        # 默认模型是 Pro，显示分辨率选项
-        self._set_resolution_visible("pro" in self.model_combo.currentText().lower())
+        # 默认模型是 3.1 flash，显示分辨率选项
+        model_lower = self.model_combo.currentText().lower()
+        self._set_resolution_visible("pro" in model_lower or "3.1-flash" in model_lower)
     
     def _on_model_changed(self, model_name):
         """模型切换时显示/隐藏分辨率选项"""
-        is_pro = "pro" in model_name.lower()
+        # Pro 模型和 3.1 flash 模型支持分辨率选项
+        is_pro = "pro" in model_name.lower() or "3.1-flash" in model_name.lower()
         self._set_resolution_visible(is_pro)
         self._update_size()
     
@@ -1873,8 +1875,9 @@ class GeminiAPINode(NodeItem):
             "model": self.model_combo.currentText(),
             "aspect_ratio": self.aspect_ratio_combo.currentText(),
         }
-        # Pro 模型传递分辨率（API 需要 "1K"/"2K"/"4K" 大写字符串）
-        if "pro" in params["model"].lower():
+        # Pro 模型和 3.1 flash 模型传递分辨率（API 需要 "1K"/"2K"/"4K" 大写字符串）
+        model_lower = params["model"].lower()
+        if "pro" in model_lower or "3.1-flash" in model_lower:
             params["image_size"] = self.resolution_combo.currentText()  # "1K"/"2K"/"4K"
         return params
     
