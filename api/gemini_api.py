@@ -165,7 +165,9 @@ class GeminiAPI:
             
             except (requests.exceptions.SSLError,
                     requests.exceptions.ConnectionError,
-                    requests.exceptions.Timeout) as e:
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.ContentDecodingError) as e:
                 if attempt < max_attempts:
                     wait = 5 * attempt
                     print(f"网络错误(第{attempt}次): {e}")

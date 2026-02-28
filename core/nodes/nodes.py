@@ -1248,7 +1248,8 @@ class KlingAPINode(NodeItem):
     
     def _on_prompt_changed(self):
         doc = self.prompt_edit.document()
-        doc.setTextWidth(170)
+        text_width = self.prompt_edit.width() - 10 if self.prompt_edit.width() > 10 else 195
+        doc.setTextWidth(text_width)
         new_height = int(doc.size().height()) + 10
         self.prompt_edit.setMinimumHeight(max(40, new_height))
         self._update_size()
@@ -1558,7 +1559,8 @@ class JimengAPINode(NodeItem):
     
     def _on_prompt_changed(self):
         doc = self.prompt_edit.document()
-        doc.setTextWidth(170)
+        text_width = self.prompt_edit.width() - 10 if self.prompt_edit.width() > 10 else 195
+        doc.setTextWidth(text_width)
         new_height = int(doc.size().height()) + 10
         self.prompt_edit.setMinimumHeight(max(40, new_height))
         self._update_size()
@@ -1824,7 +1826,8 @@ class GeminiAPINode(NodeItem):
     
     def _on_prompt_changed(self):
         doc = self.prompt_edit.document()
-        doc.setTextWidth(170)
+        text_width = self.prompt_edit.width() - 10 if self.prompt_edit.width() > 10 else 195
+        doc.setTextWidth(text_width)
         new_height = int(doc.size().height()) + 10
         self.prompt_edit.setMinimumHeight(max(40, new_height))
         self._update_size()
@@ -1846,6 +1849,10 @@ class GeminiAPINode(NodeItem):
                         img_path = getattr(src_node, 'image_path', '')
                     elif src_node.node_type == "gemini_api":
                         img_path = getattr(src_node, 'generated_image_path', '')
+                    elif src_node.node_type == "output":
+                        img_path = getattr(src_node, 'video_path', '')
+                    elif src_node.node_type == "image_edit":
+                        img_path = getattr(src_node, '_result_path', '')
                     if img_path and Path(img_path).exists():
                         connected_items.append((src_node.id, img_path))
         
@@ -1862,6 +1869,10 @@ class GeminiAPINode(NodeItem):
     def get_ordered_image_paths(self):
         """获取用户排序后的图片路径列表（执行时使用）"""
         return self.thumbnail_strip.get_ordered_image_paths()
+    
+    def get_ordered_node_ids(self):
+        """获取用户排序后的节点ID列表（执行时使用）"""
+        return self._image_order if self._image_order else self.thumbnail_strip.get_ordered_node_ids()
     
     def _restore_image_order(self):
         """边恢复后，根据保存的顺序重排缩略图"""

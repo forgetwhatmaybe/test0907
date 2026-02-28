@@ -257,32 +257,42 @@ class ExecuteThread(QThread):
     
     def _get_gemini_input_images(self, node):
         """收集 Gemini 节点的输入图片（按用户排序顺序）"""
-        # 优先使用用户在缩略图条中排好的顺序
-        ordered = node.get_ordered_image_paths()
-        if ordered:
-            return ordered[:14]
+        # 获取用户排序后的节点ID顺序
+        ordered_ids = node.get_ordered_node_ids()
         
-        # 回退：从连线中收集（无排序）
-        image_paths = []
+        # 从连线中收集所有图片，构建 node_id -> path 映射
+        id_to_path = {}
         for socket in node.inputs:
             for edge in socket.edges:
                 if edge.start_socket:
                     src_node = edge.start_socket.node
-                    if src_node.node_type == "image" and src_node.image_path:
-                        image_paths.append(src_node.image_path)
+                    img_path = ""
+                    if src_node.node_type == "image":
+                        img_path = getattr(src_node, 'image_path', '')
                     elif src_node.node_type == "gemini_api":
-                        gen_path = getattr(src_node, 'generated_image_path', '')
-                        if gen_path:
-                            image_paths.append(gen_path)
+                        img_path = getattr(src_node, 'generated_image_path', '')
                     elif src_node.node_type == "output":
-                        out_path = getattr(src_node, 'video_path', '')
-                        if out_path and Path(out_path).exists():
-                            image_paths.append(out_path)
+                        img_path = getattr(src_node, 'video_path', '')
                     elif src_node.node_type == "image_edit":
-                        edit_path = getattr(src_node, '_result_path', '')
-                        if edit_path:
-                            image_paths.append(edit_path)
-        return image_paths[:14]
+                        img_path = getattr(src_node, '_result_path', '')
+                    if img_path and Path(img_path).exists():
+                        id_to_path[src_node.id] = img_path
+        
+        if not id_to_path:
+            return []
+        
+        # 按用户排序顺序返回图片路径
+        result = []
+        for nid in ordered_ids:
+            if nid in id_to_path:
+                result.append(id_to_path[nid])
+        
+        # 追加未在排序列表中的新图片
+        for nid, path in id_to_path.items():
+            if nid not in ordered_ids:
+                result.append(path)
+        
+        return result[:14]
     
     def _execute_kling_node(self, node):
         self.progress.emit(f"正在执行: {node.title}")
