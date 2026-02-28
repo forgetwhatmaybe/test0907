@@ -217,7 +217,7 @@ class KlingAPI(BaseAPI):
                     result = response.json()
                     code = result.get("code", 0)
                     msg = result.get("message", "请求过快")
-                except:
+                except (json.JSONDecodeError, ValueError):
                     code = 429
                     msg = "请求过快，超出并发限制"
                 wait = 30 * (attempt + 1)

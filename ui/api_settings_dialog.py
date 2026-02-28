@@ -26,11 +26,15 @@ class TestConnectionThread(QThread):
     def run(self):
         try:
             result = self.api.test_connection()
+            if self.isInterruptionRequested():
+                return
             if result:
                 self.finished_signal.emit(True, f"{self.platform_name} 连接成功！")
             else:
                 self.finished_signal.emit(False, f"{self.platform_name} 连接失败，请检查密钥是否正确")
         except Exception as e:
+            if self.isInterruptionRequested():
+                return
             self.finished_signal.emit(False, f"{self.platform_name} 连接错误: {str(e)}")
 
 
@@ -526,8 +530,8 @@ class APISettingsDialog(QDialog):
     
     def _on_testing_cancel(self, button):
         if hasattr(self, 'test_thread') and self.test_thread.isRunning():
-            self.test_thread.terminate()
-            self.test_thread.wait()
+            self.test_thread.requestInterruption()
+            self.test_thread.wait(3000)  # 等待最多3秒
         self.testing_msg.close()
     
     def _on_test_finished(self, success: bool, message: str):

@@ -144,8 +144,9 @@ class GraphicsView(QGraphicsView):
                 # 未命中目标 socket —— 弹出快捷创建菜单
                 self._show_edge_drop_menu(pos, scene_pos, start_type)
 
-            if self.drag_edge in self.scene().edges:
-                self.scene().remove_edge(self.drag_edge)
+            scene = self.scene()
+            if scene and self.drag_edge in scene.edges:
+                scene.remove_edge(self.drag_edge)
 
             self.drag_edge = None
 

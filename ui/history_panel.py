@@ -113,8 +113,12 @@ class HistoryPanel(QWidget):
         self.history_list.clear()
         
         if self.history_file.exists():
-            with open(self.history_file, "r", encoding="utf-8") as f:
-                history = json.load(f)
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"历史记录文件损坏，将重新创建: {e}")
+                return
             
             for item in reversed(history):
                 list_item = QListWidgetItem()
@@ -134,8 +138,12 @@ class HistoryPanel(QWidget):
         history = []
         
         if self.history_file.exists():
-            with open(self.history_file, "r", encoding="utf-8") as f:
-                history = json.load(f)
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"历史记录文件损坏，将重新创建: {e}")
+                history = []
         
         new_item = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -151,8 +159,11 @@ class HistoryPanel(QWidget):
         if len(history) > 100:
             history = history[-100:]
         
-        with open(self.history_file, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2, ensure_ascii=False)
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            print(f"保存历史记录失败: {e}")
         
         self._load_history()
     

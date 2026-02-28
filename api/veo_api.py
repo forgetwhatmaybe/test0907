@@ -124,26 +124,43 @@ class VeoAPI:
         url = f"{self._base_url}/models/{model}:predictLongRunning?key={self.api_key}"
         print(f"[Veo] 提交任务: {self._base_url}/models/{model}:predictLongRunning?key=***")
 
-        resp = self._session.post(url, json=body, timeout=(20, 120))
-        if resp.status_code != 200:
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
             try:
-                err = resp.json()
-                msg = err.get("error", {}).get("message", resp.text[:400])
-            except Exception:
-                msg = resp.text[:400]
-            raise Exception(f"Veo API 错误 (HTTP {resp.status_code}): {msg}")
+                resp = self._session.post(url, json=body, timeout=(20, 120))
+                if resp.status_code != 200:
+                    try:
+                        err = resp.json()
+                        msg = err.get("error", {}).get("message", resp.text[:400])
+                    except Exception:
+                        msg = resp.text[:400]
+                    raise Exception(f"Veo API 错误 (HTTP {resp.status_code}): {msg}")
 
-        try:
-            data = resp.json()
-        except Exception:
-            raise Exception(f"Veo API 返回非 JSON 格式: {resp.text[:400]}")
+                try:
+                    data = resp.json()
+                except Exception:
+                    raise Exception(f"Veo API 返回非 JSON 格式: {resp.text[:400]}")
 
-        operation_name = data.get("name", "")
-        if not operation_name:
-            raise Exception(f"Veo API 未返回操作名称，响应: {str(data)[:400]}")
+                operation_name = data.get("name", "")
+                if not operation_name:
+                    raise Exception(f"Veo API 未返回操作名称，响应: {str(data)[:400]}")
 
-        print(f"[Veo] 操作名称: {operation_name}")
-        return operation_name
+                print(f"[Veo] 操作名称: {operation_name}")
+                return operation_name
+
+            except (requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.ContentDecodingError) as e:
+                if attempt < max_attempts:
+                    wait = 5 * attempt
+                    print(f"[Veo] 网络错误(第{attempt}次): {e}，{wait}秒后重试")
+                    time.sleep(wait)
+                    continue
+                raise Exception(f"Veo API 网络错误，重试{max_attempts}次后失败: {e}")
+
+        raise Exception("Veo API 超过最大重试次数")
 
     # ------------------------------------------------------------------ #
     #  轮询操作
@@ -161,41 +178,59 @@ class VeoAPI:
         # 拼出完整 URL: {base_url}/{operation_name}?key={api_key}
         url = f"{self._base_url}/{operation_name}?key={self.api_key}"
 
-        resp = self._session.get(url, timeout=(15, 60))
-        if resp.status_code != 200:
-            print(f"[Veo] 轮询返回 HTTP {resp.status_code}: {resp.text[:200]}")
-            return False, ""
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self._session.get(url, timeout=(15, 60))
+                if resp.status_code != 200:
+                    print(f"[Veo] 轮询返回 HTTP {resp.status_code}: {resp.text[:200]}")
+                    return False, ""
 
-        try:
-            data = resp.json()
-        except Exception:
-            return False, ""
+                try:
+                    data = resp.json()
+                except Exception:
+                    return False, ""
 
-        done = data.get("done", False)
-        if not done:
-            return False, ""
+                done = data.get("done", False)
+                if not done:
+                    return False, ""
 
-        # 操作已完成，提取视频数据
-        error = data.get("error")
-        if error:
-            raise Exception(f"Veo 操作失败: {error.get('message', str(error))}")
+                # 操作已完成，提取视频数据
+                error = data.get("error")
+                if error:
+                    raise Exception(f"Veo 操作失败: {error.get('message', str(error))}")
 
-        response = data.get("response", {})
-        rai_count = response.get("raiMediaFilteredCount", 0)
-        if rai_count and rai_count > 0:
-            raise Exception(
-                f"视频被 Responsible AI 内容政策过滤（{rai_count} 个）。"
-                "请修改提示词或图片后重试。"
-            )
+                response = data.get("response", {})
+                rai_count = response.get("raiMediaFilteredCount", 0)
+                if rai_count and rai_count > 0:
+                    raise Exception(
+                        f"视频被 Responsible AI 内容政策过滤（{rai_count} 个）。"
+                        "请修改提示词或图片后重试。"
+                    )
 
-        videos = response.get("videos", [])
-        if videos:
-            video_b64 = videos[0].get("bytesBase64Encoded", "")
-            if video_b64:
-                return True, video_b64
+                videos = response.get("videos", [])
+                if videos:
+                    video_b64 = videos[0].get("bytesBase64Encoded", "")
+                    if video_b64:
+                        return True, video_b64
 
-        # 完成但无 base64（可能已写入 GCS，但我们没有提供 storageUri）
-        return True, ""
+                # 完成但无 base64（可能已写入 GCS，但我们没有提供 storageUri）
+                return True, ""
+
+            except (requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.ContentDecodingError) as e:
+                if attempt < max_attempts:
+                    wait = 3 * attempt
+                    print(f"[Veo] 轮询网络错误(第{attempt}次): {e}，{wait}秒后重试")
+                    time.sleep(wait)
+                    continue
+                print(f"[Veo] 轮询网络错误，重试{max_attempts}次后失败: {e}")
+                return False, ""
+
+        return False, ""
 
     # ------------------------------------------------------------------ #
     #  等待完成

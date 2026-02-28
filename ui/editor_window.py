@@ -1284,8 +1284,8 @@ class EditorWindow(QMainWindow):
                 "zoom": self.view._zoom
             }
             self.project_manager.save_workflow(data)
-        except:
-            pass
+        except Exception as e:
+            print(f"自动保存失败: {e}")
     
     def _schedule_auto_save(self):
         """防抖：节点内容变化时重启定时器，2秒后才真正保存"""

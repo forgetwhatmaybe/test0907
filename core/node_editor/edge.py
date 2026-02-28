@@ -65,6 +65,9 @@ class Edge(QGraphicsPathItem):
         
         if self.scene():
             self.scene().remove_edge(self)
+        
+        self.start_socket = None
+        self.end_socket = None
     
     def setSelected(self, selected):
         self._selected = selected

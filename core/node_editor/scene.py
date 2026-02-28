@@ -101,13 +101,21 @@ class NodeScene(QGraphicsScene):
         for edge_data in data.get("edges", []):
             start_node_id = edge_data.get("start_node")
             end_node_id = edge_data.get("end_node")
-            start_socket_index = edge_data.get("start_socket")
-            end_socket_index = edge_data.get("end_socket")
+            start_socket_index = edge_data.get("start_socket", 0)
+            end_socket_index = edge_data.get("end_socket", 0)
             
             start_node = node_id_map.get(start_node_id)
             end_node = node_id_map.get(end_node_id)
             
             if start_node and end_node:
+                # 检查 socket 索引是否越界
+                if start_socket_index >= len(start_node.outputs):
+                    print(f"Warning: start_socket_index {start_socket_index} out of range for node {start_node.title}")
+                    continue
+                if end_socket_index >= len(end_node.inputs):
+                    print(f"Warning: end_socket_index {end_socket_index} out of range for node {end_node.title}")
+                    continue
+                
                 from .edge import Edge
                 start_socket = start_node.outputs[start_socket_index]
                 end_socket = end_node.inputs[end_socket_index]

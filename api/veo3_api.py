@@ -107,31 +107,48 @@ class Veo3API:
         url = f"{self.BASE_URL}/v1/video/create"
         print(f"[Veo3] 提交任务: {url} model={model}")
 
-        resp = self._session.post(url, headers=headers, json=body, timeout=(30, 180))
-        
-        if resp.status_code != 200:
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
             try:
-                err = resp.json()
-                msg = err.get("error") or err.get("message") or ""
-                if isinstance(msg, dict):
-                    msg = msg.get("message", str(msg))
-                if not msg:
-                    msg = resp.text[:400]
-            except Exception:
-                msg = resp.text[:400]
-            raise Exception(f"Veo3 API 错误 (HTTP {resp.status_code}): {msg}")
+                resp = self._session.post(url, headers=headers, json=body, timeout=(30, 180))
+                
+                if resp.status_code != 200:
+                    try:
+                        err = resp.json()
+                        msg = err.get("error") or err.get("message") or ""
+                        if isinstance(msg, dict):
+                            msg = msg.get("message", str(msg))
+                        if not msg:
+                            msg = resp.text[:400]
+                    except Exception:
+                        msg = resp.text[:400]
+                    raise Exception(f"Veo3 API 错误 (HTTP {resp.status_code}): {msg}")
 
-        try:
-            data = resp.json()
-        except Exception:
-            raise Exception(f"Veo3 API 返回非 JSON 格式: {resp.text[:400]}")
+                try:
+                    data = resp.json()
+                except Exception:
+                    raise Exception(f"Veo3 API 返回非 JSON 格式: {resp.text[:400]}")
 
-        task_id = data.get("id", "")
-        if not task_id:
-            raise Exception(f"Veo3 API 未返回任务 ID，响应: {str(data)[:400]}")
+                task_id = data.get("id", "")
+                if not task_id:
+                    raise Exception(f"Veo3 API 未返回任务 ID，响应: {str(data)[:400]}")
 
-        print(f"[Veo3] 任务 ID: {task_id}")
-        return task_id
+                print(f"[Veo3] 任务 ID: {task_id}")
+                return task_id
+
+            except (requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.ContentDecodingError) as e:
+                if attempt < max_attempts:
+                    wait = 5 * attempt
+                    print(f"[Veo3] 网络错误(第{attempt}次): {e}，{wait}秒后重试")
+                    time.sleep(wait)
+                    continue
+                raise Exception(f"Veo3 API 网络错误，重试{max_attempts}次后失败: {e}")
+
+        raise Exception("Veo3 API 超过最大重试次数")
 
     def get_task_status(self, task_id: str) -> dict:
         """查询任务状态
@@ -152,56 +169,74 @@ class Veo3API:
         url = f"{self.BASE_URL}/v1/video/query?id={task_id}"
         print(f"[Veo3] 查询任务状态: {url}")
         print(f"[Veo3] 原始 task_id: {task_id}")
-        resp = self._session.get(url, headers=headers, timeout=(30, 120))
 
-        if resp.status_code != 200:
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
             try:
-                err = resp.json()
-                msg = err.get("error", {}).get("message", resp.text[:400])
-            except Exception:
-                msg = resp.text[:400]
-            return {"status": "failed", "error": f"HTTP {resp.status_code}: {msg}"}
+                resp = self._session.get(url, headers=headers, timeout=(30, 120))
 
-        try:
-            data = resp.json()
-        except Exception:
-            return {"status": "failed", "error": "非 JSON 响应"}
+                if resp.status_code != 200:
+                    try:
+                        err = resp.json()
+                        msg = err.get("error", {}).get("message", resp.text[:400])
+                    except Exception:
+                        msg = resp.text[:400]
+                    return {"status": "failed", "error": f"HTTP {resp.status_code}: {msg}"}
 
-        status = data.get("status", "pending")
-        result = {"status": status}
+                try:
+                    data = resp.json()
+                except Exception:
+                    return {"status": "failed", "error": "非 JSON 响应"}
 
-        if status == "completed":
-            # 尝试从响应中获取视频 URL
-            # 1. 根级别 video_url
-            video_url = data.get("video_url")
-            # 2. detail.video_url 或 detail.upsample_video_url
-            if not video_url and "detail" in data:
-                detail = data.get("detail", {})
-                video_url = detail.get("upsample_video_url") or detail.get("video_url")
-            # 3. 其他可能的字段
-            if not video_url:
-                video_url = data.get("output_url") or data.get("url")
-            # 4. choices 数组
-            if not video_url and "choices" in data:
-                choices = data.get("choices", [])
-                if choices:
-                    video_url = choices[0].get("video_url") or choices[0].get("url")
-            result["video_url"] = video_url
-        elif status == "failed":
-            # 尝试获取错误信息
-            error_msg = data.get("error") or data.get("error_message")
-            if not error_msg and "detail" in data:
-                detail = data.get("detail", {})
-                error_msg = detail.get("error_message") or detail.get("video_generation_error")
-            # 如果 error_msg 是字典，提取 message
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message") or str(error_msg)
-            # 尝试从 message 字段获取
-            if not error_msg:
-                error_msg = data.get("message")
-            result["error"] = error_msg or "未知错误"
+                status = data.get("status", "pending")
+                result = {"status": status}
 
-        return result
+                if status == "completed":
+                    # 尝试从响应中获取视频 URL
+                    # 1. 根级别 video_url
+                    video_url = data.get("video_url")
+                    # 2. detail.video_url 或 detail.upsample_video_url
+                    if not video_url and "detail" in data:
+                        detail = data.get("detail", {})
+                        video_url = detail.get("upsample_video_url") or detail.get("video_url")
+                    # 3. 其他可能的字段
+                    if not video_url:
+                        video_url = data.get("output_url") or data.get("url")
+                    # 4. choices 数组
+                    if not video_url and "choices" in data:
+                        choices = data.get("choices", [])
+                        if choices:
+                            video_url = choices[0].get("video_url") or choices[0].get("url")
+                    result["video_url"] = video_url
+                elif status == "failed":
+                    # 尝试获取错误信息
+                    error_msg = data.get("error") or data.get("error_message")
+                    if not error_msg and "detail" in data:
+                        detail = data.get("detail", {})
+                        error_msg = detail.get("error_message") or detail.get("video_generation_error")
+                    # 如果 error_msg 是字典，提取 message
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message") or str(error_msg)
+                    # 尝试从 message 字段获取
+                    if not error_msg:
+                        error_msg = data.get("message")
+                    result["error"] = error_msg or "未知错误"
+
+                return result
+
+            except (requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.ContentDecodingError) as e:
+                if attempt < max_attempts:
+                    wait = 3 * attempt
+                    print(f"[Veo3] 查询网络错误(第{attempt}次): {e}，{wait}秒后重试")
+                    time.sleep(wait)
+                    continue
+                return {"status": "failed", "error": f"网络错误: {e}"}
+
+        return {"status": "failed", "error": "超过最大重试次数"}
 
     def wait_for_completion(
         self,

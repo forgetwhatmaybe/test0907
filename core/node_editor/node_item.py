@@ -64,8 +64,9 @@ class Socket(QGraphicsEllipseItem):
                 for edge in self.edges[:]:
                     edge.remove()
             
-            view = self.scene().views()[0]
-            if hasattr(view, 'start_edge_drag'):
+            scene = self.scene()
+            view = scene.views()[0] if scene and scene.views() else None
+            if view and hasattr(view, 'start_edge_drag'):
                 view.start_edge_drag(self)
         
         super().mousePressEvent(event)
@@ -252,7 +253,9 @@ class NodeItem(QGraphicsItem):
         visited = set()
         self._collect_connected_nodes(self, connected_nodes, visited)
         
-        self.scene().clearSelection()
+        scene = self.scene()
+        if scene:
+            scene.clearSelection()
         
         for node in connected_nodes:
             node.setSelected(True)

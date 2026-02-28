@@ -158,7 +158,10 @@ class MainWindow(QMainWindow):
     
     def _load_projects(self):
         for i in reversed(range(self.projects_layout.count())):
-            self.projects_layout.itemAt(i).widget().setParent(None)
+            widget = self.projects_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
         
         projects = self.config.get_projects()
         
