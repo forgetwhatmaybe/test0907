@@ -295,6 +295,7 @@ class ExecuteThread(QThread):
         return result[:14]
     
     def _execute_kling_node(self, node):
+        """执行可灵生视频节点，失败后持续重试，20分钟超时"""
         self.progress.emit(f"正在执行: {node.title}")
         
         images = self._get_input_images(node)
@@ -312,38 +313,66 @@ class ExecuteThread(QThread):
         api = KlingAPI()
         api.set_credentials(keys["access_key"], keys["secret_key"])
         api._on_rate_limit = lambda wait, msg, attempt, total: \
-            self.progress.emit(f"⏳ 并发限制: {msg}，等待{wait}秒后重试 ({attempt}/{total})")
+            self.progress.emit(f"⏳ 并发限制，等待中...")
         
         params = node.get_params().copy()
         if images["last"]:
             params["tail_image"] = compress_image_if_needed(images["last"], 4.7)
-        self.progress.emit(f"提交任务到可灵AI...")
-        prompt = params.pop("prompt")
-        task_id = api.submit_image_to_video_task(image_path, prompt, **params)
-        self.progress.emit(f"等待视频生成... (任务ID: {task_id[:8]}...)")
-        video_url = api.wait_for_completion(task_id, timeout=600,
-                                            is_stopped=self.isInterruptionRequested)
-        if self.isInterruptionRequested():
-            raise _StoppedException()
-        if not video_url:
-            raise Exception(f"节点 '{node.title}' 视频生成失败")
         
-        output_nodes = self._get_target_output_nodes(node)
-        for output_node in output_nodes:
-            output_name = output_node.get_output_name()
-            save_path = self.project_manager.get_output_path(output_name)
+        import time as _time
+        start_time = _time.time()
+        timeout = 1200
+        attempt = 0
+        
+        while _time.time() - start_time < timeout:
+            if self.isInterruptionRequested():
+                raise _StoppedException()
             
-            self.progress.emit(f"下载视频到: {save_path}")
-            download_file(video_url, str(save_path))
+            attempt += 1
+            self.progress.emit(f"等待视频生成...")
             
-            thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
-            self._extract_thumbnail(str(save_path), thumb_path)
-            
-            # 直接设置 video_path，供链式执行下游节点读取
-            output_node.video_path = str(save_path)
-            self.video_generated.emit(str(save_path), output_node.id)
+            try:
+                prompt = params.get("prompt", "")
+                task_params = params.copy()
+                task_params.pop("prompt", None)
+                task_id = api.submit_image_to_video_task(image_path, prompt, **task_params)
+                
+                video_url = api.wait_for_completion(task_id, timeout=600,
+                                                    is_stopped=self.isInterruptionRequested)
+                
+                if self.isInterruptionRequested():
+                    raise _StoppedException()
+                
+                if video_url:
+                    output_nodes = self._get_target_output_nodes(node)
+                    for output_node in output_nodes:
+                        output_name = output_node.get_output_name()
+                        save_path = self.project_manager.get_output_path(output_name)
+                        
+                        download_file(video_url, str(save_path))
+                        
+                        thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
+                        self._extract_thumbnail(str(save_path), thumb_path)
+                        
+                        output_node.video_path = str(save_path)
+                        self.video_generated.emit(str(save_path), output_node.id)
+                    
+                    self.progress.emit(f"✅ 视频生成完成")
+                    return
+                    
+            except _StoppedException:
+                raise
+            except Exception as e:
+                elapsed = int(_time.time() - start_time)
+                if elapsed < timeout:
+                    _time.sleep(5)
+                else:
+                    break
+        
+        raise Exception(f"视频生成失败(已超时20分钟)")
     
     def _execute_jimeng_node(self, node):
+        """执行即梦生视频节点，失败后持续重试，20分钟超时"""
         self.progress.emit(f"正在执行: {node.title}")
         
         images = self._get_input_images(node)
@@ -361,45 +390,66 @@ class ExecuteThread(QThread):
         api = JimengAPI()
         api.set_credentials(keys["access_key"], keys["secret_key"])
         api._on_rate_limit = lambda wait, msg, attempt, total: \
-            self.progress.emit(f"⏳ 并发限制: {msg}，等待{wait}秒后重试 ({attempt}/{total})")
+            self.progress.emit(f"⏳ 并发限制，等待中...")
         
         params = node.get_params()
         
         if images["last"]:
             params["tail_image"] = compress_image_if_needed(images["last"], 4.7)
         
-        self.progress.emit(f"提交任务到即梦AI...")
+        import time as _time
+        start_time = _time.time()
+        timeout = 1200
+        attempt = 0
         
-        prompt = params.pop("prompt")
-        task_id = api.submit_image_to_video_task(image_path, prompt, **params)
-        
-        self.progress.emit(f"等待视频生成... (任务ID: {task_id[:8]}...)")
-        
-        video_url = api.wait_for_completion(task_id, timeout=600,
-                                            is_stopped=self.isInterruptionRequested)
-        
-        if self.isInterruptionRequested():
-            raise _StoppedException()
-        if not video_url:
-            raise Exception(f"节点 '{node.title}' 视频生成失败")
-        
-        output_nodes = self._get_target_output_nodes(node)
-        for output_node in output_nodes:
-            output_name = output_node.get_output_name()
-            save_path = self.project_manager.get_output_path(output_name)
+        while _time.time() - start_time < timeout:
+            if self.isInterruptionRequested():
+                raise _StoppedException()
             
-            self.progress.emit(f"下载视频到: {save_path}")
-            download_file(video_url, str(save_path))
+            attempt += 1
+            self.progress.emit(f"等待视频生成...")
             
-            thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
-            self._extract_thumbnail(str(save_path), thumb_path)
-            
-            # 直接设置 video_path，供链式执行下游节点读取
-            output_node.video_path = str(save_path)
-            self.video_generated.emit(str(save_path), output_node.id)
+            try:
+                task_params = params.copy()
+                prompt = task_params.pop("prompt", "")
+                task_id = api.submit_image_to_video_task(image_path, prompt, **task_params)
+                
+                video_url = api.wait_for_completion(task_id, timeout=600,
+                                                    is_stopped=self.isInterruptionRequested)
+                
+                if self.isInterruptionRequested():
+                    raise _StoppedException()
+                
+                if video_url:
+                    output_nodes = self._get_target_output_nodes(node)
+                    for output_node in output_nodes:
+                        output_name = output_node.get_output_name()
+                        save_path = self.project_manager.get_output_path(output_name)
+                        
+                        download_file(video_url, str(save_path))
+                        
+                        thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
+                        self._extract_thumbnail(str(save_path), thumb_path)
+                        
+                        output_node.video_path = str(save_path)
+                        self.video_generated.emit(str(save_path), output_node.id)
+                    
+                    self.progress.emit(f"✅ 视频生成完成")
+                    return
+                    
+            except _StoppedException:
+                raise
+            except Exception as e:
+                elapsed = int(_time.time() - start_time)
+                if elapsed < timeout:
+                    _time.sleep(5)
+                else:
+                    break
+        
+        raise Exception(f"视频生成失败(已超时20分钟)")
     
     def _execute_gemini_node(self, node):
-        """执行香蕉生图（Gemini）节点"""
+        """执行香蕉生图（Gemini）节点，失败后最多重试3次"""
         self.progress.emit(f"正在执行: {node.title}")
         
         image_paths = self._get_gemini_input_images(node)
@@ -413,57 +463,67 @@ class ExecuteThread(QThread):
         api = GeminiAPI()
         api.set_credentials(keys["api_key"], base_url=keys.get("base_url", ""))
         api._on_rate_limit = lambda wait, msg, attempt, total: \
-            self.progress.emit(f"⏳ 并发限制: {msg}，等待{wait}秒后重试 ({attempt}/{total})")
+            self.progress.emit(f"⏳ 并发限制，等待中...")
         
         params = node.get_params()
         prompt = params.get("prompt", "")
         if not prompt:
             raise Exception(f"节点 '{node.title}' 没有设置提示词")
         
-        # 生成保存路径
         import time as _time
         timestamp = int(_time.time() * 1000)
         save_dir = self.project_manager.current_project_path / "素材库"
         save_dir.mkdir(exist_ok=True)
         save_path = str(save_dir / f"gemini_{timestamp}.png")
         
-        self.progress.emit(f"正在调用 Gemini 生成图片...")
+        max_retries = 3
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            if self.isInterruptionRequested():
+                raise _StoppedException()
+            
+            self.progress.emit(f"等待图片生成...")
+            
+            try:
+                result_path = api.generate_image(
+                    prompt=prompt,
+                    image_paths=image_paths if image_paths else None,
+                    model=params.get("model", "gemini-2.5-flash-preview-image-generation"),
+                    aspect_ratio=params.get("aspect_ratio", "1:1"),
+                    image_size=params.get("image_size", ""),
+                    save_path=save_path,
+                    is_stopped=self.isInterruptionRequested
+                )
+                
+                if self.isInterruptionRequested():
+                    raise _StoppedException()
+                
+                if result_path:
+                    node.generated_image_path = result_path
+                    self.progress.emit(f"✅ 图片生成完成")
+                    self.node_status_changed.emit(node.id, "gemini_done:" + result_path)
+                    
+                    output_nodes = self._get_target_output_nodes(node)
+                    for output_node in output_nodes:
+                        output_name = output_node.get_output_name()
+                        output_path = str(self.project_manager.current_project_path / f"{output_name}.png")
+                        import shutil as _shutil
+                        _shutil.copy2(result_path, output_path)
+                        output_node.video_path = output_path
+                        self.video_generated.emit(output_path, output_node.id)
+                    return
+                    
+            except _StoppedException:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    _time.sleep(2)
         
-        result_path = api.generate_image(
-            prompt=prompt,
-            image_paths=image_paths if image_paths else None,
-            model=params.get("model", "gemini-2.5-flash-preview-image-generation"),
-            aspect_ratio=params.get("aspect_ratio", "1:1"),
-            image_size=params.get("image_size", ""),
-            save_path=save_path,
-            is_stopped=self.isInterruptionRequested
-        )
-        
-        if self.isInterruptionRequested():
-            raise _StoppedException()
-        if not result_path:
-            raise Exception(f"节点 '{node.title}' 图片生成失败")
-        
-        # 将生成的图片路径存储到节点上，供下游节点读取
-        node.generated_image_path = result_path
-        self.progress.emit(f"✅ 图片已生成: {Path(result_path).name}")
-        
-        # 更新节点预览（通过信号回到主线程）
-        self.node_status_changed.emit(node.id, "gemini_done:" + result_path)
-        
-        # 如果直接连接到 OutputNode，将图片复制到输出位置
-        output_nodes = self._get_target_output_nodes(node)
-        for output_node in output_nodes:
-            output_name = output_node.get_output_name()
-            output_path = str(self.project_manager.current_project_path / f"{output_name}.png")
-            import shutil as _shutil
-            _shutil.copy2(result_path, output_path)
-            # 直接设置 video_path，供链式执行下游节点读取
-            output_node.video_path = output_path
-            self.video_generated.emit(output_path, output_node.id)
+        raise Exception(f"图片生成失败(已重试{max_retries}次)")
     
     def _execute_veo_node(self, node):
-        """执行 Veo3 生视频节点（向量引擎中转服务）"""
+        """执行 Veo3 生视频节点（向量引擎中转服务），失败后持续重试，20分钟超时"""
         self.progress.emit(f"正在执行: {node.title}")
         
         images = self._get_input_images(node)
@@ -491,55 +551,75 @@ class ExecuteThread(QThread):
         enable_upsample = params.get("enable_upsample", True)
         mode = params.get("mode", "image_to_video")
         
-        self.progress.emit(f"提交任务到 Veo3 ({model})...")
-        
         image_list = [image_path]
         if mode == "first_last_frame" and images["last"]:
             image_list.append(compress_image_if_needed(images["last"], 4.7))
         
-        task_id = api.submit_video_task(
-            prompt=prompt,
-            model=model,
-            images=image_list,
-            enhance_prompt=enhance_prompt,
-            enable_upsample=enable_upsample,
-            aspect_ratio=aspect_ratio,
-        )
+        import time as _time
+        start_time = _time.time()
+        timeout = 1200
+        attempt = 0
         
-        self.progress.emit(f"等待视频生成... (任务: {task_id[:16]}...)")
+        while _time.time() - start_time < timeout:
+            if self.isInterruptionRequested():
+                raise _StoppedException()
+            
+            attempt += 1
+            self.progress.emit(f"等待视频生成...")
+            
+            try:
+                task_id = api.submit_video_task(
+                    prompt=prompt,
+                    model=model,
+                    images=image_list,
+                    enhance_prompt=enhance_prompt,
+                    enable_upsample=enable_upsample,
+                    aspect_ratio=aspect_ratio,
+                )
+                
+                video_url = api.wait_for_completion(
+                    task_id,
+                    timeout=600,
+                    is_stopped=self.isInterruptionRequested
+                )
+                
+                if self.isInterruptionRequested():
+                    raise _StoppedException()
+                
+                if video_url:
+                    output_nodes = self._get_target_output_nodes(node)
+                    for output_node in output_nodes:
+                        output_name = output_node.get_output_name()
+                        save_path = self.project_manager.get_output_path(output_name)
+                        
+                        import requests
+                        resp = requests.get(video_url, timeout=120)
+                        if resp.status_code == 200:
+                            with open(str(save_path), 'wb') as f:
+                                f.write(resp.content)
+                        else:
+                            raise Exception(f"视频下载失败: HTTP {resp.status_code}")
+                        
+                        thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
+                        self._extract_thumbnail(str(save_path), thumb_path)
+                        
+                        output_node.video_path = str(save_path)
+                        self.video_generated.emit(str(save_path), output_node.id)
+                    
+                    self.progress.emit(f"✅ 视频生成完成")
+                    return
+                    
+            except _StoppedException:
+                raise
+            except Exception as e:
+                elapsed = int(_time.time() - start_time)
+                if elapsed < timeout:
+                    _time.sleep(5)
+                else:
+                    break
         
-        video_url = api.wait_for_completion(
-            task_id,
-            timeout=600,
-            is_stopped=self.isInterruptionRequested
-        )
-        
-        if self.isInterruptionRequested():
-            raise _StoppedException()
-        if not video_url:
-            raise Exception(f"节点 '{node.title}' 视频生成失败")
-        
-        output_nodes = self._get_target_output_nodes(node)
-        for output_node in output_nodes:
-            output_name = output_node.get_output_name()
-            save_path = self.project_manager.get_output_path(output_name)
-            
-            self.progress.emit(f"下载视频到: {save_path}")
-            
-            import requests
-            resp = requests.get(video_url, timeout=120)
-            if resp.status_code == 200:
-                with open(str(save_path), 'wb') as f:
-                    f.write(resp.content)
-            else:
-                raise Exception(f"视频下载失败: HTTP {resp.status_code}")
-            
-            thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
-            self._extract_thumbnail(str(save_path), thumb_path)
-            
-            output_node.video_path = str(save_path)
-            self.video_generated.emit(str(save_path), output_node.id)
-    
+        raise Exception(f"视频生成失败(已超时20分钟)")
+      
     def _execute_image_edit_node(self, node):
         """执行图片修改节点：可灵扩图 / 即梦超清 / 即梦局部重绘"""
         self.progress.emit(f"正在执行: {node.title}")

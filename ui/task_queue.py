@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QTimer, QPoint
 from PyQt5.QtGui import QColor, QCursor
 from enum import Enum, auto
+import time
 
 
 class TaskState(Enum):
@@ -74,11 +75,11 @@ class TaskQueueManager(QObject):
             "type_label": type_label,
             "message": "正在执行...",
             "thread": thread,
+            "start_time": time.time(),
         }
         if task_id not in self._task_order:
             self._task_order.append(task_id)
 
-        # 连接线程信号
         thread.progress.connect(lambda msg, tid=task_id: self._on_progress(tid, msg))
         thread.finished_signal.connect(lambda ok, msg, tid=task_id: self._on_finished(tid, ok, msg))
         thread.start()
@@ -167,30 +168,30 @@ class TaskRowWidget(QFrame):
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(8)
 
-        # 名称
         self.name_label = QLabel(info["output_name"])
         self.name_label.setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 13px;")
         self.name_label.setFixedWidth(120)
         layout.addWidget(self.name_label)
 
-        # 类型
         self.type_label = QLabel(info["type_label"])
         self.type_label.setStyleSheet("color: #aaa; font-size: 12px;")
         self.type_label.setFixedWidth(90)
         layout.addWidget(self.type_label)
 
-        # 状态
         self.state_label = QLabel()
         self.state_label.setFixedWidth(80)
         layout.addWidget(self.state_label)
 
-        # 消息
+        self.time_label = QLabel()
+        self.time_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.time_label.setFixedWidth(60)
+        layout.addWidget(self.time_label)
+
         self.msg_label = QLabel()
         self.msg_label.setStyleSheet("color: #999; font-size: 11px;")
         self.msg_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addWidget(self.msg_label)
 
-        # 停止按钮
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setFixedSize(50, 24)
         self.stop_btn.setStyleSheet("""
@@ -207,7 +208,28 @@ class TaskRowWidget(QFrame):
         self.stop_btn.clicked.connect(lambda: self.stop_requested.emit(self.task_id))
         layout.addWidget(self.stop_btn)
 
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._update_elapsed_time)
+        self._update_timer.start(1000)
+
         self.update_info(info)
+
+    def _update_elapsed_time(self):
+        """每秒更新已执行时间"""
+        if self._info and self._info.get("state") == TaskState.RUNNING:
+            start_time = self._info.get("start_time", time.time())
+            elapsed = int(time.time() - start_time)
+            self.time_label.setText(self._format_time(elapsed))
+
+    def _format_time(self, seconds):
+        """格式化时间为 MM:SS 或 HH:MM:SS"""
+        if seconds < 3600:
+            m, s = divmod(seconds, 60)
+            return f"{m:02d}:{s:02d}"
+        else:
+            h, rem = divmod(seconds, 3600)
+            m, s = divmod(rem, 60)
+            return f"{h:d}:{m:02d}:{s:02d}"
 
     def update_info(self, info):
         self._info = info
@@ -217,8 +239,17 @@ class TaskRowWidget(QFrame):
         self.state_label.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: bold;")
         self.msg_label.setText(info["message"])
         self.name_label.setText(info["output_name"])
-        # 只有运行中的才能停止
         self.stop_btn.setEnabled(state == TaskState.RUNNING)
+        
+        if state != TaskState.RUNNING:
+            self._update_timer.stop()
+            start_time = info.get("start_time", time.time())
+            elapsed = int(time.time() - start_time)
+            self.time_label.setText(self._format_time(elapsed))
+        else:
+            start_time = info.get("start_time", time.time())
+            elapsed = int(time.time() - start_time)
+            self.time_label.setText(self._format_time(elapsed))
 
     def _show_context_menu(self, pos: QPoint):
         """显示右键菜单"""

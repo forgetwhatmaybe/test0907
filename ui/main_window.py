@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea,
     QToolBar, QAction, QLabel, QMessageBox, QFileDialog, QInputDialog
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
@@ -80,10 +80,11 @@ class MainWindow(QMainWindow):
         """)
         
         self.projects_container = QWidget()
-        self.projects_layout = QHBoxLayout(self.projects_container)
+        self.projects_layout = QGridLayout(self.projects_container)
         self.projects_layout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.projects_layout.setSpacing(20)
         self.projects_layout.setContentsMargins(0, 20, 0, 0)
+        self._projects_per_row = 4
         
         scroll_area.setWidget(self.projects_container)
         layout.addWidget(scroll_area)
@@ -165,6 +166,8 @@ class MainWindow(QMainWindow):
         
         projects = self.config.get_projects()
         
+        col = 0
+        row = 0
         for project_path in projects:
             path = Path(project_path)
             if path.exists():
@@ -172,7 +175,11 @@ class MainWindow(QMainWindow):
                 widget.clicked.connect(self._open_project)
                 widget.delete_requested.connect(self._delete_project)
                 widget.icon_imported.connect(lambda p: self._load_projects())
-                self.projects_layout.addWidget(widget)
+                self.projects_layout.addWidget(widget, row, col)
+                col += 1
+                if col >= self._projects_per_row:
+                    col = 0
+                    row += 1
         
         add_btn = QWidget()
         add_btn.setFixedSize(180, 200)
@@ -195,7 +202,7 @@ class MainWindow(QMainWindow):
         add_btn.setCursor(Qt.PointingHandCursor)
         add_btn.mousePressEvent = lambda e: self._new_project()
         
-        self.projects_layout.addWidget(add_btn)
+        self.projects_layout.addWidget(add_btn, row, col)
     
     def _new_project(self):
         dialog = NewProjectDialog(self)
