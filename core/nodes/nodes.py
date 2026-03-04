@@ -2203,11 +2203,11 @@ class ImageEditNode(NodeItem):
 
 
 # =========================================================================== #
-#  VeoAPINode  — Veo3 生视频（向量引擎中转服务）
+#  VeoAPINode  — Veo3 生视频节点
 # =========================================================================== #
 
 class VeoAPINode(NodeItem):
-    """Veo3 生视频节点（向量引擎中转服务）
+    """Veo3 生视频节点
 
     支持多种模型：
       - veo2, veo2-fast, veo2-pro
@@ -2617,27 +2617,28 @@ class OutputNode(NodeItem):
     
     def set_execution_status(self, status):
         """设置执行状态，改变节点标题栏颜色
-        status: 'executing'=蓝色, 'success'=绿色, 'error'=红色, None=恢复默认
+        status: 'executing'=蓝色, 'success'=绿色, 'error'=红色, 'cancelled'=灰色, None=恢复默认
         """
         color_map = {
             "executing": ("#1565C0", "#1976D2"),  # 蓝色
             "success": ("#2E7D32", "#388E3C"),     # 绿色
             "error": ("#C62828", "#D32F2F"),        # 红色
+            "cancelled": ("#616161", "#757575"),    # 灰色
         }
         self._status_color = color_map.get(status)
         self.update()
-        
+
         # 成功和失败状态自动恢复
         if self._status_timer:
             self._status_timer.stop()
             self._status_timer = None
-        
+
         if status == "success":
             self._status_timer = QTimer()
             self._status_timer.setSingleShot(True)
             self._status_timer.timeout.connect(self._reset_status_color)
             self._status_timer.start(5000)  # 5秒后恢复
-        elif status == "error":
+        elif status in ("error", "cancelled"):
             self._status_timer = QTimer()
             self._status_timer.setSingleShot(True)
             self._status_timer.timeout.connect(self._reset_status_color)

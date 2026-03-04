@@ -58,7 +58,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='TapNow',
+    name='BU蓝昊_pic_video',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

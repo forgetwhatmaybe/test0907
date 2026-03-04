@@ -39,6 +39,7 @@ class TaskQueueManager(QObject):
     task_finished   = pyqtSignal(str)           # task_id
     queue_empty     = pyqtSignal()              # 所有任务都完成
     active_count_changed = pyqtSignal(int)      # 正在执行的任务数变化
+    task_stopped    = pyqtSignal(str)           # task_id - 任务被用户停止
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -94,6 +95,7 @@ class TaskQueueManager(QObject):
             t["state"] = TaskState.CANCELLED
             t["message"] = "正在停止..."
             self.task_updated.emit(task_id)
+            self.task_stopped.emit(task_id)
 
     def stop_all(self):
         for tid in list(self._tasks):

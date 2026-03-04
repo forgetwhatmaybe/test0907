@@ -8,7 +8,7 @@ from urllib3.util.retry import Retry
 
 
 class Veo3API:
-    """Veo3 视频生成 API（向量引擎中转服务）
+    """Veo3 视频生成 API
     
     支持多种 Veo 模型：
       - veo2, veo2-fast, veo2-fast-frames, veo2-fast-components, veo2-pro

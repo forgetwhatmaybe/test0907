@@ -16,6 +16,8 @@ class GraphicsView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 隐藏选中节点的虚线焦点框
+        self.setStyleSheet("QGraphicsView { outline: none; }")
         
         self._zoom = 1.0
         self._zoom_min = 0.2

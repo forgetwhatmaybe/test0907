@@ -1,4 +1,4 @@
-﻿"""输出节点 - 支持视频预览和播放"""
+"""输出节点 - 支持视频预览和播放"""
 
 from PyQt5.QtWidgets import (
     QLabel, QVBoxLayout, QHBoxLayout, QLineEdit, QWidget, QMenu, QAction, QApplication
@@ -38,23 +38,24 @@ class OutputNode(NodeItem):
     
     def set_execution_status(self, status):
         """设置执行状态，改变节点标题栏颜色
-        
+
         Args:
-            status: 'executing'=蓝色, 'success'=绿色, 'error'=红色, None=恢复默认
+            status: 'executing'=蓝色, 'success'=绿色, 'error'=红色, 'cancelled'=灰色, None=恢复默认
         """
         color_map = {
             "executing": ("#1565C0", "#1976D2"),
             "success": ("#2E7D32", "#388E3C"),
             "error": ("#C62828", "#D32F2F"),
+            "cancelled": ("#616161", "#757575"),
         }
         self._status_color = color_map.get(status)
         self.update()
-        
+
         if self._status_timer:
             self._status_timer.stop()
             self._status_timer = None
-        
-        if status in ("success", "error"):
+
+        if status in ("success", "error", "cancelled"):
             self._status_timer = QTimer()
             self._status_timer.setSingleShot(True)
             self._status_timer.timeout.connect(self._reset_status_color)

@@ -316,13 +316,7 @@ class APISettingsDialog(QDialog):
         ak_label = QLabel("API Key:")
         ak_label.setStyleSheet("color: #e0e0e0;")
         form_layout.addRow(ak_label, self.gemini_api_key_edit)
-        
-        self.gemini_base_url_edit = QLineEdit()
-        self.gemini_base_url_edit.setPlaceholderText("留空使用官方地址，填写则走中转")
-        url_label = QLabel("中转地址:")
-        url_label.setStyleSheet("color: #e0e0e0;")
-        form_layout.addRow(url_label, self.gemini_base_url_edit)
-        
+
         self.gemini_show_keys_cb = QPushButton("显示密钥")
         self.gemini_show_keys_cb.setCheckable(True)
         self.gemini_show_keys_cb.toggled.connect(self._toggle_gemini_keys_visibility)
@@ -338,12 +332,8 @@ class APISettingsDialog(QDialog):
         
         hint_label = QLabel(
             "提示：\n"
-            "1. 官方密钥：前往 Google AI Studio 获取\n"
-            "   https://aistudio.google.com/apikey\n\n"
-            "2. 中转服务：填写中转地址 + SK 开头的令牌\n"
+            "1. 使用 SK 开头的 API 令牌\n"
             "   ⚠ 注意：请使用 API 令牌，不要填兑换码\n\n"
-            "中转地址留空 = 直连官方 API\n"
-            "中转地址示例: https://xxx.example.com/v1beta\n\n"
             "支持模型：\n"
             "• Gemini 2.5 Flash Image (快速)\n"
             "• Gemini 2.0 Flash Image (快速)\n"
@@ -361,11 +351,11 @@ class APISettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        group = QGroupBox("🎬 Veo3 视频生成 API 密钥 (向量引擎中转)")
+        group = QGroupBox("🎬 Veo3 视频生成 API 密钥 ")
         form_layout = QFormLayout(group)
         
         self.veo3_api_key_edit = QLineEdit()
-        self.veo3_api_key_edit.setPlaceholderText("请输入向量引擎 API Key")
+        self.veo3_api_key_edit.setPlaceholderText("请输入 API Key")
         self.veo3_api_key_edit.setEchoMode(QLineEdit.Password)
         ak_label = QLabel("API Key:")
         ak_label.setStyleSheet("color: #e0e0e0;")
@@ -382,16 +372,14 @@ class APISettingsDialog(QDialog):
         
         hint_label = QLabel(
             "提示：\n"
-            "1. 前往向量引擎获取 API Key\n"
-            "   https://vectorengine.ai\n\n"
-            "2. 支持模型（默认: veo3.1-pro）：\n"
+            "1. 支持模型（默认: veo3.1-pro）：\n"
             "   • veo3.1-pro (高质量, 自适应首尾帧/文生视频)\n"
             "   • veo3.1-fast, veo3.1, veo3.1-4k, veo3.1-pro-4k\n"
             "   • veo3-pro, veo3-fast, veo3-fast-frames\n"
             "   • veo3-frames, veo3-pro-frames\n"
             "   • veo2-pro, veo2-fast, veo2-fast-frames\n"
             "   • veo2-fast-components, veo2-pro-components\n\n"
-            "3. 特性：\n"
+            "2. 特性：\n"
             "   • 所有视频均为无声版本\n"
             "   • 支持中文提示词自动转英文\n"
             "   • 支持图片输入（图生视频/首尾帧）\n"
@@ -512,8 +500,7 @@ class APISettingsDialog(QDialog):
             return
         
         api = GeminiAPI()
-        base_url = self.gemini_base_url_edit.text().strip()
-        api.set_credentials(api_key, base_url=base_url)
+        api.set_credentials(api_key)
         
         self._show_testing_dialog()
         self.test_thread = TestConnectionThread(api, "🍌 香蕉模型 (Gemini)")
@@ -554,7 +541,6 @@ class APISettingsDialog(QDialog):
         
         gemini_keys = self.config.get_api_keys("gemini")
         self.gemini_api_key_edit.setText(gemini_keys.get("api_key", ""))
-        self.gemini_base_url_edit.setText(gemini_keys.get("base_url", ""))
         
         veo3_keys = self.config.get_api_keys("veo3")
         self.veo3_api_key_edit.setText(veo3_keys.get("api_key", ""))
@@ -578,8 +564,7 @@ class APISettingsDialog(QDialog):
         })
         
         self.config.set_api_keys("gemini", {
-            "api_key": self.gemini_api_key_edit.text(),
-            "base_url": self.gemini_base_url_edit.text().strip()
+            "api_key": self.gemini_api_key_edit.text()
         })
         
         self.config.set_api_keys("veo3", {

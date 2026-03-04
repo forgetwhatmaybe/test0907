@@ -14,7 +14,7 @@ class GeminiAPI:
     支持文生图、图生图，最多 14 张参考图片输入。
     """
     
-    BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    BASE_URL = "https://api.vectorengine.ai/v1"
     
     def __init__(self):
         self.api_key = ""

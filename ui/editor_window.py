@@ -523,7 +523,7 @@ class ExecuteThread(QThread):
         raise Exception(f"图片生成失败(已重试{max_retries}次)")
     
     def _execute_veo_node(self, node):
-        """执行 Veo3 生视频节点（向量引擎中转服务），失败后持续重试，20分钟超时"""
+        """执行 Veo3 生视频节点，失败后持续重试，20分钟超时"""
         self.progress.emit(f"正在执行: {node.title}")
         
         images = self._get_input_images(node)
@@ -806,6 +806,7 @@ class EditorWindow(QMainWindow):
         self.task_queue = TaskQueueManager(self)
         self.task_queue.active_count_changed.connect(self._on_active_count_changed)
         self.task_queue.queue_empty.connect(self._on_queue_empty)
+        self.task_queue.task_stopped.connect(self._on_task_stopped)
         self._queue_dialog = None
         
         # 防抖自动保存定时器（内容变化后2秒无操作才保存）
@@ -1543,7 +1544,13 @@ class EditorWindow(QMainWindow):
         """所有任务完成"""
         self.statusBar().showMessage("✅ 所有任务已完成")
         self.stop_action.setEnabled(False)
-    
+
+    def _on_task_stopped(self, task_id):
+        """任务被用户停止，更新输出节点状态为 cancelled"""
+        node = self.scene.get_node_by_id(task_id)
+        if node and hasattr(node, 'set_execution_status'):
+            node.set_execution_status('cancelled')
+
     def _on_node_status_changed(self, node_id, status):
         """更新节点的执行状态颜色"""
         node = self.scene.get_node_by_id(node_id)

@@ -18,7 +18,7 @@ def main():
     socket.connectToServer(server_name)
     
     if socket.waitForConnected(500):
-        QMessageBox.warning(None, "提示", "TapNow 已经在运行中！")
+        QMessageBox.warning(None, "提示","BU蓝昊_pic_video 已经在运行中！")
         sys.exit(0)
     
     server = QLocalServer()
