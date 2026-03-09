@@ -13,19 +13,24 @@ from utils.config import Config
 from api.kling_api import KlingAPI
 from api.jimeng_api import JimengAPI
 from api.gemini_api import GeminiAPI
+from api.text_vision_api import TextVisionAPI
 
 
 class TestConnectionThread(QThread):
     finished_signal = pyqtSignal(bool, str)
     
-    def __init__(self, api_instance, platform_name):
+    def __init__(self, api_instance, platform_name, model=None):
         super().__init__()
         self.api = api_instance
         self.platform_name = platform_name
+        self.model = model
     
     def run(self):
         try:
-            result = self.api.test_connection()
+            if self.model:
+                result = self.api.test_connection(self.model)
+            else:
+                result = self.api.test_connection()
             if self.isInterruptionRequested():
                 return
             if result:
@@ -203,6 +208,12 @@ class APISettingsDialog(QDialog):
         
         veo3_tab = self._create_veo3_tab()
         tab_widget.addTab(veo3_tab, "🎬 Veo3视频")
+        
+        gemini3_tab = self._create_gemini3_tab()
+        tab_widget.addTab(gemini3_tab, "🔮 Gemini")
+        
+        gpt52_tab = self._create_gpt52_tab()
+        tab_widget.addTab(gpt52_tab, "🤖 GPT")
         
         general_tab = self._create_general_tab()
         tab_widget.addTab(general_tab, "通用设置")
@@ -392,6 +403,90 @@ class APISettingsDialog(QDialog):
         
         return widget
     
+    def _create_gemini3_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        group = QGroupBox("🔮 Gemini API 密钥")
+        form_layout = QFormLayout(group)
+        
+        self.gemini3_api_key_edit = QLineEdit()
+        self.gemini3_api_key_edit.setPlaceholderText("请输入 Gemini API Key")
+        self.gemini3_api_key_edit.setEchoMode(QLineEdit.Password)
+        ak_label = QLabel("API Key:")
+        ak_label.setStyleSheet("color: #e0e0e0;")
+        form_layout.addRow(ak_label, self.gemini3_api_key_edit)
+        
+        self.gemini3_show_keys_cb = QPushButton("显示密钥")
+        self.gemini3_show_keys_cb.setCheckable(True)
+        self.gemini3_show_keys_cb.toggled.connect(self._toggle_gemini3_keys_visibility)
+        form_layout.addRow("", self.gemini3_show_keys_cb)
+        
+        layout.addWidget(group)
+        
+        test_btn = QPushButton("测试连接")
+        test_btn.clicked.connect(self._test_gemini3_connection)
+        layout.addWidget(test_btn)
+        
+        layout.addStretch()
+        
+        hint_label = QLabel(
+            "提示：\n"
+            "1. Gemini-3 Flash 用于文本视觉节点\n"
+            "   支持图片理解和文本生成\n\n"
+            "2. 特性：\n"
+            "   • 支持多图片输入\n"
+            "   • 支持中英文提示词\n"
+            "   • 图片需压缩到 4.7MB 以下\n"
+        )
+        hint_label.setStyleSheet("color: #888888; font-size: 11px;")
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+        
+        return widget
+    
+    def _create_gpt52_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        group = QGroupBox("🤖 GPT API 密钥")
+        form_layout = QFormLayout(group)
+        
+        self.gpt52_api_key_edit = QLineEdit()
+        self.gpt52_api_key_edit.setPlaceholderText("请输入 GPT API Key")
+        self.gpt52_api_key_edit.setEchoMode(QLineEdit.Password)
+        ak_label = QLabel("API Key:")
+        ak_label.setStyleSheet("color: #e0e0e0;")
+        form_layout.addRow(ak_label, self.gpt52_api_key_edit)
+        
+        self.gpt52_show_keys_cb = QPushButton("显示密钥")
+        self.gpt52_show_keys_cb.setCheckable(True)
+        self.gpt52_show_keys_cb.toggled.connect(self._toggle_gpt52_keys_visibility)
+        form_layout.addRow("", self.gpt52_show_keys_cb)
+        
+        layout.addWidget(group)
+        
+        test_btn = QPushButton("测试连接")
+        test_btn.clicked.connect(self._test_gpt52_connection)
+        layout.addWidget(test_btn)
+        
+        layout.addStretch()
+        
+        hint_label = QLabel(
+            "提示：\n"
+            "1. GPT-5.2 用于文本视觉节点\n"
+            "   支持图片理解和文本生成\n\n"
+            "2. 特性：\n"
+            "   • 支持多图片输入\n"
+            "   • 支持中英文提示词\n"
+            "   • 高质量文本生成\n"
+        )
+        hint_label.setStyleSheet("color: #888888; font-size: 11px;")
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+        
+        return widget
+    
     def _create_general_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -460,6 +555,22 @@ class APISettingsDialog(QDialog):
             self.veo3_api_key_edit.setEchoMode(QLineEdit.Password)
             self.veo3_show_keys_cb.setText("显示密钥")
     
+    def _toggle_gemini3_keys_visibility(self, checked):
+        if checked:
+            self.gemini3_api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.gemini3_show_keys_cb.setText("隐藏密钥")
+        else:
+            self.gemini3_api_key_edit.setEchoMode(QLineEdit.Password)
+            self.gemini3_show_keys_cb.setText("显示密钥")
+    
+    def _toggle_gpt52_keys_visibility(self, checked):
+        if checked:
+            self.gpt52_api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.gpt52_show_keys_cb.setText("隐藏密钥")
+        else:
+            self.gpt52_api_key_edit.setEchoMode(QLineEdit.Password)
+            self.gpt52_show_keys_cb.setText("显示密钥")
+    
     def _test_kling_connection(self):
         access_key = self.kling_access_key_edit.text()
         secret_key = self.kling_secret_key_edit.text()
@@ -507,6 +618,36 @@ class APISettingsDialog(QDialog):
         self.test_thread.finished_signal.connect(self._on_test_finished)
         self.test_thread.start()
     
+    def _test_gemini3_connection(self):
+        api_key = self.gemini3_api_key_edit.text()
+        
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请输入 Gemini-3 API Key")
+            return
+        
+        api = TextVisionAPI()
+        api.set_credentials(api_key)
+        
+        self._show_testing_dialog()
+        self.test_thread = TestConnectionThread(api, "🔮 Gemini", model="gemini-3.1-flash-lite-preview")
+        self.test_thread.finished_signal.connect(self._on_test_finished)
+        self.test_thread.start()
+    
+    def _test_gpt52_connection(self):
+        api_key = self.gpt52_api_key_edit.text()
+        
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请输入 GPT API Key")
+            return
+        
+        api = TextVisionAPI()
+        api.set_credentials(api_key)
+        
+        self._show_testing_dialog()
+        self.test_thread = TestConnectionThread(api, "🤖 GPT", model="gpt-5.4")
+        self.test_thread.finished_signal.connect(self._on_test_finished)
+        self.test_thread.start()
+    
     def _show_testing_dialog(self):
         self.testing_msg = QMessageBox(self)
         self.testing_msg.setWindowTitle("测试连接")
@@ -545,6 +686,12 @@ class APISettingsDialog(QDialog):
         veo3_keys = self.config.get_api_keys("veo3")
         self.veo3_api_key_edit.setText(veo3_keys.get("api_key", ""))
         
+        gemini3_keys = self.config.get_api_keys("gemini3")
+        self.gemini3_api_key_edit.setText(gemini3_keys.get("api_key", ""))
+        
+        gpt52_keys = self.config.get_api_keys("gpt52")
+        self.gpt52_api_key_edit.setText(gpt52_keys.get("api_key", ""))
+        
         default_disk = self.config.get_default_disk()
         index = self.default_disk_combo.findText(f"{default_disk}:")
         if index >= 0:
@@ -569,6 +716,14 @@ class APISettingsDialog(QDialog):
         
         self.config.set_api_keys("veo3", {
             "api_key": self.veo3_api_key_edit.text()
+        })
+        
+        self.config.set_api_keys("gemini3", {
+            "api_key": self.gemini3_api_key_edit.text()
+        })
+        
+        self.config.set_api_keys("gpt52", {
+            "api_key": self.gpt52_api_key_edit.text()
         })
         
         disk_text = self.default_disk_combo.currentText()

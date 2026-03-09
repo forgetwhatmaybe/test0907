@@ -1,4 +1,4 @@
-﻿"""节点模块 - AI 视频创作工具的节点定义
+"""节点模块 - AI 视频创作工具的节点定义
 
 重构后的模块结构：
 - cache.py: 缩略图缓存（LRU 策略）
@@ -9,6 +9,8 @@
 - video_node.py: 视频上传节点
 - output_node.py: 输出节点
 - image_edit_node.py: 图片编辑节点
+- text_vision_node.py: 文本视觉节点
+- text_display_node.py: 文本显示节点
 - api_nodes/: API 服务节点
     - kling_node.py: 可灵生视频
     - jimeng_node.py: 即梦生视频
@@ -29,6 +31,8 @@ from .image_node import ImageNode
 from .video_node import VideoNode
 from .output_node import OutputNode
 from .image_edit_node import ImageEditNode
+from .text_vision_node import TextVisionNode
+from .text_display_node import TextDisplayNode
 
 # API 节点
 from .api_nodes import KlingAPINode, JimengAPINode, GeminiAPINode, VeoAPINode
@@ -43,6 +47,8 @@ NODE_REGISTRY = {
     "gemini_api": GeminiAPINode,
     "veo_api": VeoAPINode,
     "image_edit": ImageEditNode,
+    "text_vision": TextVisionNode,
+    "text_display": TextDisplayNode,
 }
 
 def get_node_class(node_type: str):
@@ -62,6 +68,7 @@ __all__ = [
     # 节点
     'ImageNode', 'VideoNode', 'OutputNode', 'ImageEditNode',
     'KlingAPINode', 'JimengAPINode', 'GeminiAPINode', 'VeoAPINode',
+    'TextVisionNode', 'TextDisplayNode',
     # 注册表
     'NODE_REGISTRY', 'get_node_class', 'register_node',
 ]

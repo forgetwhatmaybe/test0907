@@ -15,7 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.node_editor.scene import NodeScene
 from core.node_editor.graphics_view import GraphicsView
 from core.node_editor.edge import Edge
-from core.nodes.nodes import ImageNode, KlingAPINode, JimengAPINode, GeminiAPINode, OutputNode, ImageEditNode, VideoNode, VeoAPINode
+from core.nodes.nodes import (
+    ImageNode, KlingAPINode, JimengAPINode, GeminiAPINode, 
+    OutputNode, ImageEditNode, VideoNode, VeoAPINode
+)
+from core.nodes.text_vision_node import TextVisionNode
+from core.nodes.text_display_node import TextDisplayNode
 from ui.node_panel import NodePanel
 from ui.api_settings_dialog import APISettingsDialog
 from ui.video_player import VideoPlayerDialog
@@ -38,7 +43,9 @@ NODE_REGISTRY = {
     "veo_api": VeoAPINode,
     "image_edit": ImageEditNode,
     "video": VideoNode,
-    "output": OutputNode
+    "output": OutputNode,
+    "text_vision": TextVisionNode,
+    "text_display": TextDisplayNode,
 }
 
 
@@ -73,6 +80,7 @@ class ExecuteThread(QThread):
     finished_signal = pyqtSignal(bool, str)
     video_generated = pyqtSignal(str, str)
     node_status_changed = pyqtSignal(str, str)  # (node_id, status: 'executing'/'success'/'error')
+    text_display_updated = pyqtSignal(str, str, int)  # (node_id, text, tokens)
     
     def __init__(self, scene, config, project_manager, output_node=None, output_nodes=None):
         super().__init__()
@@ -124,7 +132,7 @@ class ExecuteThread(QThread):
                     self.finished_signal.emit(False, "⬛ 执行已停止")
                     return
                 
-                api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "image_edit"}
+                api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "image_edit", "text_vision"}
                 if node.node_type not in api_types:
                     continue
                 
@@ -140,6 +148,8 @@ class ExecuteThread(QThread):
                         self._execute_veo_node(node)
                     elif node.node_type == "image_edit":
                         self._execute_image_edit_node(node)
+                    elif node.node_type == "text_vision":
+                        self._execute_text_vision_node(node)
                     
                     if self.isInterruptionRequested():
                         self._set_output_nodes_status(node, "cancelled")
@@ -764,6 +774,64 @@ class ExecuteThread(QThread):
             output_node.video_path = output_path
             self.video_generated.emit(output_path, output_node.id)
     
+    def _execute_text_vision_node(self, node):
+        """执行文本视觉节点：调用 GPT-5.2 或 Gemini-3 进行图片理解"""
+        self.progress.emit(f"正在执行: {node.title}")
+        
+        params = node.get_params()
+        prompt = params.get("prompt", "")
+        if not prompt:
+            raise Exception(f"节点 '{node.title}' 没有设置提示词")
+        
+        image_paths = node.get_ordered_image_paths()
+        if image_paths:
+            image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths]
+        
+        model = params.get("model", "gpt-5.2")
+        
+        if model.startswith("gpt"):
+            keys = self.config.get_api_keys("gpt52")
+            if not keys.get("api_key"):
+                raise Exception("请先配置 GPT-5.2 的 API 密钥（在设置 → GPT-5.2）")
+        else:
+            keys = self.config.get_api_keys("gemini3")
+            if not keys.get("api_key"):
+                raise Exception("请先配置 Gemini-3 的 API 密钥（在设置 → Gemini-3）")
+        
+        from api.text_vision_api import TextVisionAPI
+        api = TextVisionAPI()
+        api.set_credentials(keys["api_key"])
+        
+        self.progress.emit(f"正在调用 {model} 生成文本...")
+        
+        try:
+            result_text = api.generate_text(
+                prompt=prompt,
+                image_paths=image_paths,
+                model=model,
+                is_stopped=self.isInterruptionRequested
+            )
+            
+            if self.isInterruptionRequested():
+                raise _StoppedException()
+            
+            if result_text:
+                node.generated_text = result_text
+                estimated_tokens = TextVisionAPI.estimate_tokens(prompt, image_paths)
+                self.progress.emit(f"✅ 文本生成完成 (预估 {estimated_tokens} tokens)")
+                
+                # 使用信号更新文本显示节点（跨线程安全）
+                text_display_nodes = self._find_text_display_nodes(node)
+                for text_node in text_display_nodes:
+                    self.text_display_updated.emit(text_node.id, result_text, estimated_tokens)
+            else:
+                raise Exception("API 返回空结果")
+                
+        except _StoppedException:
+            raise
+        except Exception as e:
+            raise Exception(f"文本生成失败: {str(e)}")
+    
     def _find_output_nodes(self, api_node):
         output_nodes = []
         for socket in api_node.outputs:
@@ -771,6 +839,15 @@ class ExecuteThread(QThread):
                 if edge.end_socket and edge.end_socket.node.node_type == "output":
                     output_nodes.append(edge.end_socket.node)
         return output_nodes
+    
+    def _find_text_display_nodes(self, text_vision_node):
+        """查找连接到文本视觉节点的文本显示节点"""
+        text_display_nodes = []
+        for socket in text_vision_node.outputs:
+            for edge in socket.edges:
+                if edge.end_socket and edge.end_socket.node.node_type == "text_display":
+                    text_display_nodes.append(edge.end_socket.node)
+        return text_display_nodes
     
     def _extract_thumbnail(self, video_path, thumb_path):
         try:
@@ -1506,6 +1583,7 @@ class EditorWindow(QMainWindow):
             )
             thread.video_generated.connect(self._on_video_generated)
             thread.node_status_changed.connect(self._on_node_status_changed)
+            thread.text_display_updated.connect(self._on_text_display_updated)
             
             self.task_queue.add_task(task_id, output_name, type_label, thread)
         
@@ -1564,6 +1642,14 @@ class EditorWindow(QMainWindow):
             return
         if hasattr(node, 'set_execution_status'):
             node.set_execution_status(status)
+    
+    def _on_text_display_updated(self, node_id, text, tokens):
+        """更新文本显示节点的内容（跨线程安全）"""
+        node = self.scene.get_node_by_id(node_id)
+        if not node:
+            return
+        if hasattr(node, 'set_display_text'):
+            node.set_display_text(text, tokens)
     
     def _on_video_generated(self, video_path, node_id):
         node = self.scene.get_node_by_id(node_id)

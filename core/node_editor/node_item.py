@@ -113,6 +113,7 @@ class NodeItem(QGraphicsItem):
         self._proxy = QGraphicsProxyWidget(self)
         self._proxy.setWidget(self._content_widget)
         self._proxy.setPos(10, 40)
+        self._proxy.setFlag(QGraphicsItem.ItemIsFocusable, True)
         
         self._update_size()
     

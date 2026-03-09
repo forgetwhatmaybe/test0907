@@ -73,7 +73,7 @@ class VeoAPINode(NodeItem):
         self.model_combo.addItems([
             "veo_3_1", "veo3.1", "veo3.1-fast", "veo3.1-pro", "veo3.1-4k", "veo3.1-pro-4k",
             "veo3", "veo3-pro", "veo3-fast", "veo3-fast-frames", "veo3-frames", "veo3-pro-frames",
-            "veo2-pro", "veo2-fast", "veo2-fast-frames", "veo2-fast-components", "veo2-pro-components",
+            "veo2-pro", "veo2-fast", "veo2-fast-frames", "veo2-fast-components", "veo2-pro-components","veo_3_1-fast"
         ])
         self.model_combo.setStyleSheet(styles.COMBO_BOX)
         layout.addWidget(self.model_combo)

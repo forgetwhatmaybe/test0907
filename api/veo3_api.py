@@ -83,7 +83,7 @@ class Veo3API:
         }
 
         # veo3 系列和 veo_3_1 支持 aspect_ratio
-        if "veo3" in model or model == "veo_3_1":
+        if "veo3" in model or "veo_3_1" in model:
             body["aspect_ratio"] = aspect_ratio
 
         # 处理图片输入

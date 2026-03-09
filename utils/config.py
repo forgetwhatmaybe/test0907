@@ -55,7 +55,9 @@ class Config:
             "api_keys": {
                 "kling": {"api_key": "", "secret_key": ""},
                 "jimeng": {"access_key": "", "secret_key": ""},
-                "gemini": {"api_key": "", "base_url": ""}
+                "gemini": {"api_key": "", "base_url": ""},
+                "gemini3": {"api_key": ""},
+                "gpt52": {"api_key": ""}
             },
             "default_disk": "D",
             "projects": [],

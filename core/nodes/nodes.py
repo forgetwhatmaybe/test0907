@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QGraphicsProxyWidget, QSlider, QGridLayout, QSizePolicy, QDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
-from PyQt5.QtGui import QPixmap, QCursor, QStandardItem, QStandardItemModel, QColor, QIcon, QImage
+from PyQt5.QtGui import QPixmap, QCursor, QStandardItem, QStandardItemModel, QColor, QIcon, QImage, QBrush
 from core.node_editor.node_item import NodeItem
 from pathlib import Path
 import shutil
@@ -1638,12 +1638,16 @@ class GeminiAPINode(NodeItem):
     
     单个橙色输入接口支持同时连接多个图片上传节点（最多14张参考图片）。
     输出为生成的图片，可连接到可灵/即梦生视频节点或视频输出节点。
+    支持动态文本输入口，接收文本节点的输出。
     """
     node_type = "gemini_api"
     
     def __init__(self):
         self.generated_image_path = ""  # 生成的图片路径，供下游节点读取
         self._image_order = []  # 用户自定义的图片node_id顺序
+        self._upper_text = ""  # 上方输入的文本
+        self._show_text_input = False  # 是否显示文本输入口
+        self._text_input_socket = None  # 文本输入socket引用
         
         super().__init__("香蕉生图")
         self.add_multi_input("参考图片")  # 橙色多连接输入
@@ -1718,8 +1722,7 @@ class GeminiAPINode(NodeItem):
         
         self.prompt_edit = QTextEdit()
         self.prompt_edit.setPlaceholderText("描述要生成的图片内容...")
-        self.prompt_edit.setMinimumHeight(40)
-        self.prompt_edit.textChanged.connect(self._on_prompt_changed)
+        self.prompt_edit.setFixedHeight(80)
         self.prompt_edit.setStyleSheet("""
             QTextEdit {
                 background-color: #2a2a2a;
@@ -1727,7 +1730,22 @@ class GeminiAPINode(NodeItem):
                 border: 1px solid #444;
                 border-radius: 3px;
                 padding: 3px;
-                min-height: 40px;
+            }
+            QScrollBar:vertical {
+                background: #2a2a2a;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #666;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
         layout.addWidget(self.prompt_edit)
@@ -1811,6 +1829,87 @@ class GeminiAPINode(NodeItem):
         # 默认模型是 3.1 flash，显示分辨率选项
         model_lower = self.model_combo.currentText().lower()
         self._set_resolution_visible("pro" in model_lower or "3.1-flash" in model_lower)
+        
+        # ---- 输入提示词接口按钮 ----
+        self.text_input_btn = QPushButton("📝 输入提示词接口")
+        self.text_input_btn.setCheckable(True)
+        self.text_input_btn.setChecked(self._show_text_input)
+        self.text_input_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+            QPushButton:checked {
+                background-color: #8B0000;
+                border-color: #ff4444;
+            }
+        """)
+        self.text_input_btn.clicked.connect(self._toggle_text_input)
+        layout.addWidget(self.text_input_btn)
+    
+    def _toggle_text_input(self):
+        """切换文本输入口的显示状态"""
+        self._show_text_input = not self._show_text_input
+        
+        if self._show_text_input:
+            self._add_text_input_socket()
+        else:
+            self._remove_text_input_socket()
+        
+        self._update_size()
+    
+    def _add_text_input_socket(self):
+        """添加红色文本输入口（在节点最下面）"""
+        if self._text_input_socket is not None:
+            return
+        
+        from core.node_editor.node_item import Socket
+        socket = Socket(self, "input", len(self.inputs), multi_input=False)
+        socket.setParentItem(self)  # 关键：设置父项才能显示
+        socket.color = QColor("#FF4444")
+        socket.setBrush(QBrush(socket.color))
+        self.inputs.append(socket)
+        self._text_input_socket = socket
+        
+        self._update_size()
+        # 延迟定位，确保节点尺寸已更新
+        QTimer.singleShot(10, self._position_text_input_socket)
+    
+    def _remove_text_input_socket(self):
+        """移除文本输入口"""
+        if self._text_input_socket is None:
+            return
+        
+        socket = self._text_input_socket
+        for edge in socket.edges[:]:
+            edge.remove()
+        
+        if socket in self.inputs:
+            self.inputs.remove(socket)
+        
+        socket.setParentItem(None)
+        if socket.scene():
+            socket.scene().removeItem(socket)
+        
+        self._text_input_socket = None
+        
+        self._update_size()
+    
+    def _position_text_input_socket(self):
+        """将文本输入口定位到节点最下面（独立于其他socket）"""
+        if self._text_input_socket is None:
+            return
+        
+        socket = self._text_input_socket
+        # 定位到节点底部左侧
+        socket.setPos(-socket.radius, self.height - 25)
     
     def _on_model_changed(self, model_name):
         """模型切换时显示/隐藏分辨率选项"""
@@ -1834,13 +1933,14 @@ class GeminiAPINode(NodeItem):
     
     def _on_edge_changed(self, edge=None):
         """输入边连接或断开时，刷新缩略图条"""
-        # 延迟一帧执行，确保edge对象已完全初始化
         QTimer.singleShot(0, self._refresh_thumbnails)
     
     def _refresh_thumbnails(self):
         """从当前连接收集图片并更新缩略图条"""
         connected_items = []
-        for socket in self.inputs:
+        # 跳过文本输入口（如果存在），处理图片输入
+        start_idx = 1 if self._text_input_socket and len(self.inputs) > 1 else 0
+        for socket in self.inputs[start_idx:]:
             for edge in socket.edges:
                 if edge.start_socket:
                     src_node = edge.start_socket.node
@@ -1860,6 +1960,19 @@ class GeminiAPINode(NodeItem):
         has_images = len(connected_items) > 0
         self.thumb_label.setVisible(has_images)
         self._update_size()
+    
+    def get_upper_text(self):
+        """获取文本输入口连接的文本"""
+        if not self._text_input_socket:
+            return ""
+        for edge in self._text_input_socket.edges:
+            if edge.start_socket:
+                src_node = edge.start_socket.node
+                if src_node.node_type == "text_vision":
+                    return getattr(src_node, 'generated_text', '')
+                elif src_node.node_type == "text_display":
+                    return getattr(src_node, 'display_text', '')
+        return ""
     
     def _on_image_order_changed(self):
         """用户拖拽改变了图片顺序"""
@@ -1904,6 +2017,7 @@ class GeminiAPINode(NodeItem):
             "resolution": self.resolution_combo.currentText(),
             "generated_image_path": self.generated_image_path,
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
+            "show_text_input": self._show_text_input,
         }
     
     def deserialize_data(self, data):
@@ -1935,6 +2049,12 @@ class GeminiAPINode(NodeItem):
         
         # 恢复图片顺序（需要在连线恢复后调用 _refresh_thumbnails）
         self._image_order = data.get("image_order", [])
+        
+        # 恢复文本输入口状态
+        if data.get("show_text_input", False):
+            self._show_text_input = True
+            self._add_text_input_socket()
+            self.text_input_btn.setChecked(True)
 
 
 class ImageEditNode(NodeItem):
@@ -2221,12 +2341,16 @@ class VeoAPINode(NodeItem):
       - 支持中文提示词自动转英文
       - 支持图片输入（图生视频/首尾帧）
       - 支持视频超分
+      - 支持动态文本输入口
     """
     node_type = "veo_api"
 
     def __init__(self):
         self.generation_mode = "image_to_video"
         self._mode_initialized = False
+        self._upper_text = ""
+        self._show_text_input = False  # 是否显示文本输入口
+        self._text_input_socket = None  # 文本输入socket引用
 
         super().__init__("Veo生视频")
         self._mode_initialized = True
@@ -2235,12 +2359,15 @@ class VeoAPINode(NodeItem):
 
     def _setup_sockets(self):
         """根据当前模式重建输入 socket"""
-        # 保存第一个输入口的连线信息
         first_input_edges = []
         if self.inputs:
-            for edge in self.inputs[0].edges[:]:
-                first_input_edges.append(edge.start_socket)
+            # 保存图片输入口的连线（跳过文本输入口）
+            start_idx = 1 if self._text_input_socket and len(self.inputs) > 1 else 0
+            for socket in self.inputs[start_idx:]:
+                for edge in socket.edges[:]:
+                    first_input_edges.append(edge.start_socket)
         
+        # 清除所有输入socket
         for socket in self.inputs[:]:
             for edge in socket.edges[:]:
                 edge.remove()
@@ -2248,24 +2375,43 @@ class VeoAPINode(NodeItem):
             if socket.scene():
                 socket.scene().removeItem(socket)
         self.inputs.clear()
-
+        self._text_input_socket = None  # 清除引用
+        
+        # 先添加图片输入口
         if self.generation_mode == "first_last_frame":
             self.add_input("首帧图片")
             self.add_input("尾帧图片")
         else:
             self.add_input("图片")
 
+        # 如果需要显示文本输入口，添加到最下面
+        if self._show_text_input:
+            from core.node_editor.node_item import Socket
+            socket = Socket(self, "input", len(self.inputs), multi_input=False)
+            socket.setParentItem(self)  # 关键：设置父项才能显示
+            socket.color = QColor("#FF4444")
+            socket.setBrush(QBrush(socket.color))
+            self.inputs.append(socket)
+            self._text_input_socket = socket
+
         if not self.outputs:
             self.add_output("视频")
         
-        # 恢复第一个输入口的连线
-        if first_input_edges and self.inputs:
+        # 恢复图片输入口的连线
+        if first_input_edges:
             from core.node_editor.edge import Edge
             scene = self.scene()
             if scene:
-                for start_socket in first_input_edges:
-                    edge = Edge(start_socket, self.inputs[0])
-                    scene.addItem(edge)
+                for i, start_socket in enumerate(first_input_edges):
+                    if i < len(self.inputs):
+                        edge = Edge(start_socket, self.inputs[i])
+                        scene.addItem(edge)
+        
+        self.update_sockets_position()
+        
+        # 延迟定位文本输入口到节点底部
+        if self._text_input_socket:
+            QTimer.singleShot(10, self._position_text_input_socket_for_veo)
 
     def _setup_content(self):
         layout = QVBoxLayout(self._content_widget)
@@ -2332,6 +2478,7 @@ class VeoAPINode(NodeItem):
             "veo2-fast-frames",
             "veo2-fast-components",
             "veo2-pro-components",
+            "veo_3_1-fast"
         ])
         self.model_combo.setStyleSheet(_combo_style)
         layout.addWidget(self.model_combo)
@@ -2373,7 +2520,7 @@ class VeoAPINode(NodeItem):
 
         self.prompt_edit = QTextEdit()
         self.prompt_edit.setPlaceholderText("支持中文，自动转英文…")
-        self.prompt_edit.setMaximumHeight(60)
+        self.prompt_edit.setFixedHeight(80)
         self.prompt_edit.setStyleSheet("""
             QTextEdit {
                 background-color: #2a2a2a;
@@ -2382,8 +2529,68 @@ class VeoAPINode(NodeItem):
                 border-radius: 3px;
                 padding: 3px;
             }
+            QScrollBar:vertical {
+                background: #2a2a2a;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #666;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
         """)
         layout.addWidget(self.prompt_edit)
+        
+        # ---- 输入提示词接口按钮 ----
+        self.text_input_btn = QPushButton("📝 输入提示词接口")
+        self.text_input_btn.setCheckable(True)
+        self.text_input_btn.setChecked(self._show_text_input)
+        self.text_input_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+            QPushButton:checked {
+                background-color: #8B0000;
+                border-color: #ff4444;
+            }
+        """)
+        self.text_input_btn.clicked.connect(self._toggle_text_input)
+        layout.addWidget(self.text_input_btn)
+    
+    def _toggle_text_input(self):
+        """切换文本输入口的显示状态"""
+        self._show_text_input = not self._show_text_input
+        self._setup_sockets()
+        self._update_size()
+    
+    def _position_text_input_socket_for_veo(self):
+        """将文本输入口定位到节点最下面（VeoAPINode专用）"""
+        if self._text_input_socket is None:
+            return
+        
+        socket = self._text_input_socket
+        # 定位到节点底部左侧
+        socket.setPos(-socket.radius, self.height - 25)
+    
+    def _reposition_sockets(self):
+        """重新定位所有socket"""
+        if hasattr(self, '_position_sockets'):
+            self._position_sockets()
 
     # ---- 模式切换 ----
 
@@ -2397,6 +2604,19 @@ class VeoAPINode(NodeItem):
             self._update_size()
 
     # ---- 参数 ----
+
+    def get_upper_text(self):
+        """获取文本输入口连接的文本"""
+        if not self._text_input_socket:
+            return ""
+        for edge in self._text_input_socket.edges:
+            if edge.start_socket:
+                src_node = edge.start_socket.node
+                if src_node.node_type == "text_vision":
+                    return getattr(src_node, 'generated_text', '')
+                elif src_node.node_type == "text_display":
+                    return getattr(src_node, 'display_text', '')
+        return ""
 
     def get_params(self):
         return {
@@ -2416,10 +2636,14 @@ class VeoAPINode(NodeItem):
             "enhance_prompt":  self.enhance_combo.currentText(),
             "enable_upsample": self.upsample_combo.currentText(),
             "prompt":          self.prompt_edit.toPlainText(),
+            "show_text_input": self._show_text_input,
         }
 
     def deserialize_data(self, data):
         self.generation_mode = data.get("generation_mode", "image_to_video")
+        
+        # 恢复文本输入口状态
+        self._show_text_input = data.get("show_text_input", False)
 
         def _set(combo, key, default):
             idx = combo.findText(data.get(key, default))
@@ -2433,6 +2657,10 @@ class VeoAPINode(NodeItem):
         self.prompt_edit.setPlainText(data.get("prompt", ""))
 
         self._setup_sockets()
+        
+        # 更新按钮状态
+        if hasattr(self, 'text_input_btn'):
+            self.text_input_btn.setChecked(self._show_text_input)
 
         mode_text = "首尾帧" if self.generation_mode == "first_last_frame" else "图生视频"
         self._mode_initialized = False

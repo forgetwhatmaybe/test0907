@@ -257,6 +257,8 @@ class GraphicsView(QGraphicsView):
             ("🍌  香蕉生图", "gemini_api"),
             ("🎬  Veo生视频", "veo_api"),
             ("✏  图片修改", "image_edit"),
+            ("📝  文本识图", "text_vision"),
+            ("📄  文本显示", "text_display"),
             ("📤  视频(图片)输出", "output"),
         ]
 
@@ -292,6 +294,13 @@ class GraphicsView(QGraphicsView):
                 menu_items.append(("✏  图片修改", "image_edit"))
             if source_node_type == 'video':
                 menu_items.append(("📤  视频(图片)输出", "output"))
+            # 文本节点可连到文本显示
+            if source_node_type == 'text_vision':
+                menu_items.append(("📄  文本显示", "text_display"))
+            # 文本输出可连到API节点
+            if source_node_type in ('text_vision', 'text_display'):
+                menu_items.append(("🍌  香蕉生图", "gemini_api"))
+                menu_items.append(("🎬  Veo生视频", "veo_api"))
         else:
             # 从输入口拖出：可以创建上游节点
             if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image_edit'):
@@ -305,6 +314,12 @@ class GraphicsView(QGraphicsView):
                 menu_items.append(("🎬  Veo生视频", "veo_api"))
                 menu_items.append(("✏  图片修改", "image_edit"))
                 menu_items.append(("🎞  视频上传", "video"))
+            # 文本显示节点可连到文本识图
+            if source_node_type == 'text_display':
+                menu_items.append(("📝  文本识图", "text_vision"))
+            # API节点可连到文本识图
+            if source_node_type in ('gemini_api', 'veo_api'):
+                menu_items.append(("📝  文本识图", "text_vision"))
 
         if not menu_items:
             return

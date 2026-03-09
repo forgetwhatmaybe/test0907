@@ -1,4 +1,4 @@
-﻿"""节点样式定义 - 统一管理和复用样式常量"""
+"""节点样式定义 - 统一管理和复用样式常量"""
 
 # 通用下拉框样式
 COMBO_BOX = """
@@ -109,3 +109,86 @@ IMAGE_LOADED = """
         border-radius: 5px;
     }
 """
+
+# 缩略图样式
+THUMBNAIL = """
+    QLabel {
+        background-color: #2a2a2a;
+        border: 2px solid #555;
+        border-radius: 3px;
+    }
+"""
+
+# 缩略图选中样式
+THUMBNAIL_SELECTED = """
+    QLabel {
+        background-color: #2a2a2a;
+        border: 2px solid #4CAF50;
+        border-radius: 3px;
+    }
+"""
+
+# 缩略图悬停样式
+THUMBNAIL_HOVER = """
+    QLabel {
+        background-color: #2a2a2a;
+        border: 2px solid #2196F3;
+        border-radius: 3px;
+    }
+"""
+
+# 缩略图高亮样式
+THUMBNAIL_HIGHLIGHT = """
+    QLabel {
+        background-color: #2a2a2a;
+        border: 2px solid #FF9800;
+        border-radius: 3px;
+    }
+"""
+
+# 缩略图拖拽中样式
+THUMBNAIL_DRAGGING = """
+    QLabel {
+        background-color: #3a3a3a;
+        border: 2px solid #FF9800;
+        border-radius: 3px;
+        opacity: 0.7;
+    }
+"""
+
+# 绿色滑块样式
+SLIDER_GREEN = """
+    QSlider::groove:horizontal {
+        height: 6px;
+        background: #3a3a3a;
+        border-radius: 3px;
+    }
+    QSlider::handle:horizontal {
+        width: 16px;
+        height: 16px;
+        background: #4CAF50;
+        border-radius: 8px;
+        margin: -5px 0;
+    }
+    QSlider::handle:horizontal:hover {
+        background: #43a047;
+    }
+"""
+
+# 数字输入框样式
+SPIN_BOX = """
+    QSpinBox {
+        background-color: #2a2a2a;
+        color: white;
+        border: 1px solid #444;
+        border-radius: 3px;
+        padding: 2px;
+    }
+    QSpinBox::up-button, QSpinBox::down-button {
+        subcontrol-origin: border;
+        subcontrol-position: right center;
+        width: 15px;
+        border-left: 1px solid #444;
+    }
+"""
+
