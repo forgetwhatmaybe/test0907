@@ -283,15 +283,19 @@ class GraphicsView(QGraphicsView):
         menu_items = []
         if start_type == 'output':
             # 从输出口拖出：可以创建下游节点
-            if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image', 'image_edit'):
+            if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image_edit'):
                 menu_items.append(("📤  视频(图片)输出", "output"))
+            if source_node_type in ('image'):
+                menu_items.append(("📝  文本识图", "text_vision"))
             if source_node_type in ('image', 'gemini_api', 'output', 'image_edit'):
                 # 图片/输出可连到API节点或图片修改节点
-                menu_items.append(("🎬  可灵生视频", "kling_api"))
-                menu_items.append(("🎥  即梦生视频", "jimeng_api"))
+
                 menu_items.append(("🍌  香蕉生图", "gemini_api"))
                 menu_items.append(("🎬  Veo生视频", "veo_api"))
                 menu_items.append(("✏  图片修改", "image_edit"))
+                menu_items.append(("🎬  可灵生视频", "kling_api"))
+                menu_items.append(("🎥  即梦生视频", "jimeng_api"))
+
             if source_node_type == 'video':
                 menu_items.append(("📤  视频(图片)输出", "output"))
             # 文本节点可连到文本显示

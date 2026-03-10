@@ -82,11 +82,12 @@ class ExecuteThread(QThread):
     node_status_changed = pyqtSignal(str, str)  # (node_id, status: 'executing'/'success'/'error')
     text_display_updated = pyqtSignal(str, str, int)  # (node_id, text, tokens)
     
-    def __init__(self, scene, config, project_manager, output_node=None, output_nodes=None):
+    def __init__(self, scene, config, project_manager, output_node=None, output_nodes=None, direct_node=None):
         super().__init__()
         self.scene = scene
         self.config = config
         self.project_manager = project_manager
+        self.direct_node = direct_node
         # output_nodes 优先，如果传入列表则使用列表；否则封装单个节点
         if output_nodes is not None:
             self.target_output_nodes = output_nodes
@@ -98,18 +99,25 @@ class ExecuteThread(QThread):
         self.target_output_node = output_node
     
     def _set_output_nodes_status(self, api_node, status):
-        """设置API节点连接的输出节点的执行状态（仅目标节点）"""
+        """设置API节点连接的输出节点或文本显示节点的执行状态（仅目标节点）"""
         output_nodes = self._get_target_output_nodes(api_node)
         for output_node in output_nodes:
             self.node_status_changed.emit(output_node.id, status)
     
     def _get_target_output_nodes(self, api_node):
         """获取需要处理的输出节点列表。
+        如果有 direct_node，并且 api_node 就是 direct_node，则只更新该 direct_node 连接的输出节点。
         安全门：如果 api_node 直连的 OutputNode 都不在 target 中
         （说明是链式执行的中间步骤），仍然写入所有直连 OutputNode，
         确保下游节点能读到最新结果。
         """
         all_output_nodes = self._find_output_nodes(api_node)
+        
+        # 如果是直接执行模式，并且当前节点就是 direct_node，则返回所有连接的输出节点
+        if self.direct_node and api_node.id == self.direct_node.id:
+            return all_output_nodes
+        
+        # 否则按原来的逻辑处理
         if not self.target_output_nodes:
             return all_output_nodes
         target_ids = {n.id for n in self.target_output_nodes}
@@ -170,7 +178,10 @@ class ExecuteThread(QThread):
     
     def _get_execution_order(self):
         """获取执行顺序，支持链式执行（OutputNode 输出端口连到下游节点）"""
-        if self.target_output_nodes:
+        if self.direct_node:
+            # 如果指定了直接节点，只执行该节点本身
+            return [self.direct_node]
+        elif self.target_output_nodes:
             # 从目标输出节点出发，同时沿输出端口向下游追踪整条链
             nodes = []
             chain_visited = set()
@@ -476,7 +487,9 @@ class ExecuteThread(QThread):
             self.progress.emit(f"⏳ 并发限制，等待中...")
         
         params = node.get_params()
-        prompt = params.get("prompt", "")
+        prompt = node.get_upper_text()
+        if not prompt:
+            prompt = params.get("prompt", "")
         if not prompt:
             raise Exception(f"节点 '{node.title}' 没有设置提示词")
         
@@ -552,7 +565,9 @@ class ExecuteThread(QThread):
         api.set_credentials(keys["api_key"])
         
         params = node.get_params()
-        prompt = params.get("prompt", "").strip()
+        prompt = node.get_upper_text()
+        if not prompt:
+            prompt = params.get("prompt", "").strip()
         if not prompt:
             prompt = "Generate videos based on images."
         model = params.get("model", "veo_3_1")
@@ -836,7 +851,7 @@ class ExecuteThread(QThread):
         output_nodes = []
         for socket in api_node.outputs:
             for edge in socket.edges:
-                if edge.end_socket and edge.end_socket.node.node_type == "output":
+                if edge.end_socket and edge.end_socket.node.node_type in ("output", "text_display"):
                     output_nodes.append(edge.end_socket.node)
         return output_nodes
     
@@ -1204,6 +1219,8 @@ class EditorWindow(QMainWindow):
                 node.set_unique_name(existing_names)
             if hasattr(node, 'on_execute_requested'):
                 node.on_execute_requested = self._on_node_execute
+            if hasattr(node, 'on_execute_current_requested'):
+                node.on_execute_current_requested = self._on_node_execute_current
             self._connect_node_signals(node)
             self.scene.add_node(node)
             self._auto_save()
@@ -1236,13 +1253,34 @@ class EditorWindow(QMainWindow):
             node.set_unique_name(existing_names)
         if hasattr(node, 'on_execute_requested'):
             node.on_execute_requested = self._on_node_execute
+        if hasattr(node, 'on_execute_current_requested'):
+            node.on_execute_current_requested = self._on_node_execute_current
         self._connect_node_signals(node)
         self.scene.add_node(node)
 
         # 自动连线
         if source_type == 'output' and node.inputs:
-            # 来源是输出口 → 连到新节点的第一个输入口
-            in_socket = node.inputs[0]
+            # 检查是否是从文本显示节点拉线到 Veo 或香蕉生图节点
+            source_node = source_socket.node
+            is_text_display_source = (hasattr(source_node, 'node_type') and 
+                                      source_node.node_type in ('text_display', 'text_vision'))
+            is_target_gemini_or_veo = node_type in ('gemini_api', 'veo_api')
+            
+            in_socket = None
+            
+            if is_text_display_source and is_target_gemini_or_veo:
+                # 自动显示红色文本输入口
+                if hasattr(node, '_toggle_text_input') and not node._show_text_input:
+                    node._toggle_text_input()
+                
+                # 连接到红色文本输入口
+                if hasattr(node, '_text_input_socket') and node._text_input_socket:
+                    in_socket = node._text_input_socket
+            
+            # 如果没有特殊处理，使用默认第一个输入口
+            if in_socket is None:
+                in_socket = node.inputs[0]
+            
             if not getattr(in_socket, 'multi_input', False):
                 for edge in in_socket.edges[:]:
                     edge.remove()
@@ -1269,6 +1307,71 @@ class EditorWindow(QMainWindow):
                 self._execute_workflow(output_node=node)
         else:
             self._execute_workflow(output_node=output_node)
+    
+    def _on_node_execute_current(self, node):
+        """执行当前节点连接的上游节点"""
+        self._execute_current_node(node)
+    
+    def _execute_current_node(self, node):
+        """执行直接连接到该输出节点或文本显示节点的上游节点"""
+        if not self.scene.nodes:
+            QMessageBox.warning(self, "警告", "工作流中没有节点")
+            return
+        
+        # 找到直接连接的上游API节点
+        direct_api_node = None
+        for socket in node.inputs:
+            for edge in socket.edges:
+                if edge.start_socket:
+                    src_node = edge.start_socket.node
+                    api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "image_edit", "text_vision"}
+                    if src_node.node_type in api_types:
+                        direct_api_node = src_node
+                        break
+            if direct_api_node:
+                break
+        
+        if not direct_api_node:
+            QMessageBox.warning(self, "警告", "该节点没有直接连接到API节点")
+            return
+        
+        # 创建并提交任务，只执行该直接连接的API节点
+        task_id = node.id
+        existing = self.task_queue.tasks.get(task_id)
+        if existing and existing["state"].name == "RUNNING":
+            node_name = node.get_output_name() if hasattr(node, 'get_output_name') else (node.title if hasattr(node, 'title') else '节点')
+            self.statusBar().showMessage(f"⏳ {node_name} 正在执行中")
+            return
+        
+        # 获取输出名称
+        if hasattr(node, 'get_output_name'):
+            output_name = node.get_output_name()
+        elif hasattr(node, 'name_edit'):
+            output_name = node.name_edit.text()
+        else:
+            output_name = 'text_output'
+        
+        # 检测任务类型
+        type_label = "当前节点"
+        if hasattr(self, '_detect_task_type') and hasattr(node, 'inputs'):
+            try:
+                type_label = self._detect_task_type(node)
+            except:
+                pass
+        
+        thread = ExecuteThread(
+            self.scene, self.config, self.project_manager,
+            output_node=node,
+            direct_node=direct_api_node
+        )
+        thread.video_generated.connect(self._on_video_generated)
+        thread.node_status_changed.connect(self._on_node_status_changed)
+        thread.text_display_updated.connect(self._on_text_display_updated)
+        
+        self.task_queue.add_task(task_id, output_name, type_label, thread)
+        self.stop_action.setEnabled(True)
+        active = self.task_queue.active_count()
+        self.statusBar().showMessage(f"🔄 {active} 个任务正在执行")
     
     def _go_back(self):
         self._save_workflow()
@@ -1492,6 +1595,8 @@ class EditorWindow(QMainWindow):
                     # 为输出节点设置执行回调
                     if hasattr(node, 'on_execute_requested'):
                         node.on_execute_requested = self._on_node_execute
+                    if hasattr(node, 'on_execute_current_requested'):
+                        node.on_execute_current_requested = self._on_node_execute_current
                     # 连接节点内容变化信号到自动保存
                     self._connect_node_signals(node)
                 
@@ -1592,7 +1697,7 @@ class EditorWindow(QMainWindow):
         self.statusBar().showMessage(f"🔄 {active} 个任务正在执行")
     
     def _detect_task_type(self, output_node):
-        """检测输出节点的上游API类型，用于队列显示"""
+        """检测输出节点或文本显示节点的上游API类型，用于队列显示"""
         for socket in output_node.inputs:
             for edge in socket.edges:
                 if edge.start_socket:
@@ -1608,6 +1713,8 @@ class EditorWindow(QMainWindow):
                     elif src.node_type == "image_edit":
                         mode = getattr(src, 'edit_mode', '图片修改')
                         return mode
+                    elif src.node_type == "text_vision":
+                        return "文本识图"
         return "工作流"
     
     def _on_active_count_changed(self, count):

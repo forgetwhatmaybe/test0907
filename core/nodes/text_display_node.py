@@ -27,6 +27,7 @@ class TextDisplayNode(NodeItem):
         self.add_output("文本")
         
         self.on_execute_requested = None
+        self.on_execute_current_requested = None
         self._update_size()
     
     def set_execution_status(self, status):
@@ -122,14 +123,14 @@ class TextDisplayNode(NodeItem):
         """)
         layout.addWidget(self.name_edit)
         
-        text_label = QLabel("生成文本:")
+        text_label = QLabel("生成文本 (可编辑):")
         text_label.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(text_label)
         
         self.text_display = QTextEdit()
-        self.text_display.setReadOnly(True)
-        self.text_display.setPlaceholderText("执行后显示生成的文本...")
+        self.text_display.setPlaceholderText("执行后显示生成的文本，可直接修改...")
         self.text_display.setMinimumHeight(80)
+        self.text_display.textChanged.connect(self._on_text_changed)
         self.text_display.setStyleSheet("""
             QTextEdit {
                 background-color: #1a1a1a;
@@ -192,7 +193,9 @@ class TextDisplayNode(NodeItem):
         """设置显示的文本"""
         self.display_text = text
         self._actual_tokens = tokens
+        self.text_display.blockSignals(True)
         self.text_display.setPlainText(text)
+        self.text_display.blockSignals(False)
         self.token_label.setText(f"Token: {tokens}")
     
     def get_display_text(self):
@@ -201,6 +204,16 @@ class TextDisplayNode(NodeItem):
     def set_actual_tokens(self, tokens):
         self._actual_tokens = tokens
         self.token_label.setText(f"Token: {tokens}")
+    
+    def _on_text_changed(self):
+        """文本内容改变时更新内部状态和调整大小"""
+        self.display_text = self.text_display.toPlainText()
+        doc = self.text_display.document()
+        text_width = self.text_display.width() - 10 if self.text_display.width() > 10 else 195
+        doc.setTextWidth(text_width)
+        new_height = int(doc.size().height()) + 10
+        self.text_display.setMinimumHeight(max(80, new_height))
+        self._update_size()
     
     def _copy_text(self):
         """复制文本到剪贴板"""
@@ -213,6 +226,11 @@ class TextDisplayNode(NodeItem):
         """点击执行按钮"""
         if self.on_execute_requested:
             self.on_execute_requested(self)
+    
+    def _on_execute_current(self):
+        """执行当前节点"""
+        if hasattr(self, 'on_execute_current_requested') and self.on_execute_current_requested:
+            self.on_execute_current_requested(self)
     
     def _create_context_menu(self):
         menu = QMenu()
@@ -233,9 +251,13 @@ class TextDisplayNode(NodeItem):
             }
         """)
         
-        execute_action = QAction("▶ 执行工作流", menu)
-        execute_action.triggered.connect(self._on_execute)
-        menu.addAction(execute_action)
+        execute_current_action = QAction("▶ 执行当前节点", menu)
+        execute_current_action.triggered.connect(lambda: self._on_execute_current())
+        menu.addAction(execute_current_action)
+        
+        execute_workflow_action = QAction("▶ 执行工作流", menu)
+        execute_workflow_action.triggered.connect(self._on_execute)
+        menu.addAction(execute_workflow_action)
         
         if self.display_text:
             copy_action = QAction("📋 复制文本", menu)
@@ -257,5 +279,7 @@ class TextDisplayNode(NodeItem):
         self._actual_tokens = data.get("actual_tokens", 0)
         
         if self.display_text:
+            self.text_display.blockSignals(True)
             self.text_display.setPlainText(self.display_text)
+            self.text_display.blockSignals(False)
             self.token_label.setText(f"Token: {self._actual_tokens}")

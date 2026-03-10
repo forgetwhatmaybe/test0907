@@ -385,13 +385,21 @@ class OutputNode(NodeItem):
         if hasattr(self, 'on_execute_requested') and self.on_execute_requested:
             self.on_execute_requested(self)
     
+    def _on_execute_current(self):
+        if hasattr(self, 'on_execute_current_requested') and self.on_execute_current_requested:
+            self.on_execute_current_requested(self)
+    
     def _create_context_menu(self):
         menu = QMenu()
         menu.setStyleSheet(styles.CONTEXT_MENU)
         
-        execute_action = QAction("▶ 执行工作流", menu)
-        execute_action.triggered.connect(self._on_execute)
-        menu.addAction(execute_action)
+        execute_current_action = QAction("▶ 执行当前节点", menu)
+        execute_current_action.triggered.connect(lambda: self._on_execute_current())
+        menu.addAction(execute_current_action)
+        
+        execute_workflow_action = QAction("▶ 执行工作流", menu)
+        execute_workflow_action.triggered.connect(self._on_execute)
+        menu.addAction(execute_workflow_action)
         
         if self.video_path and Path(self.video_path).exists():
             copy_action = QAction("📋 复制输出文件路径", menu)

@@ -97,7 +97,8 @@ class GeminiAPI:
         contents_parts = []
         
         # 文本提示
-        contents_parts.append({"text": prompt})
+        modified_prompt = f"生成图片{prompt}生成图片"
+        contents_parts.append({"text": modified_prompt})
         
         # 参考图片（base64 内联）
         if image_paths:
