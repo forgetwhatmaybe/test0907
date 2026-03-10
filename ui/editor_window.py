@@ -100,21 +100,24 @@ class ExecuteThread(QThread):
     
     def _set_output_nodes_status(self, api_node, status):
         """设置API节点连接的输出节点或文本显示节点的执行状态（仅目标节点）"""
-        output_nodes = self._get_target_output_nodes(api_node)
+        output_nodes = self._get_status_output_nodes(api_node)
         for output_node in output_nodes:
             self.node_status_changed.emit(output_node.id, status)
     
-    def _get_target_output_nodes(self, api_node):
-        """获取需要处理的输出节点列表。
-        如果有 direct_node，并且 api_node 就是 direct_node，则只更新该 direct_node 连接的输出节点。
-        安全门：如果 api_node 直连的 OutputNode 都不在 target 中
-        （说明是链式执行的中间步骤），仍然写入所有直连 OutputNode，
-        确保下游节点能读到最新结果。
+    def _get_status_output_nodes(self, api_node):
+        """获取需要显示执行状态的输出节点列表。
+        如果有 direct_node，并且 api_node 就是 direct_node，则只更新发起执行的目标输出节点。
         """
         all_output_nodes = self._find_output_nodes(api_node)
         
-        # 如果是直接执行模式，并且当前节点就是 direct_node，则返回所有连接的输出节点
+        # 如果是直接执行模式，并且当前节点就是 direct_node，则只返回发起执行的目标输出节点
         if self.direct_node and api_node.id == self.direct_node.id:
+            # 只返回 target_output_nodes 中存在的节点
+            if self.target_output_nodes:
+                target_ids = {n.id for n in self.target_output_nodes}
+                filtered = [n for n in all_output_nodes if n.id in target_ids]
+                if filtered:
+                    return filtered
             return all_output_nodes
         
         # 否则按原来的逻辑处理
@@ -127,6 +130,12 @@ class ExecuteThread(QThread):
         # filtered 为空：直连 OutputNode 都不在最终目标中
         # 这是链式执行的中间步骤，必须写入中间 OutputNode 才能继续传递结果
         return all_output_nodes
+    
+    def _get_target_output_nodes(self, api_node):
+        """获取需要保存结果的输出节点列表。
+        始终返回所有连接的输出节点，确保所有输出节点都能收到结果。
+        """
+        return self._find_output_nodes(api_node)
     
     def run(self):
         try:
@@ -1309,8 +1318,14 @@ class EditorWindow(QMainWindow):
             self._execute_workflow(output_node=output_node)
     
     def _on_node_execute_current(self, node):
-        """执行当前节点连接的上游节点"""
-        self._execute_current_node(node)
+        """执行当前节点连接的上游节点：如果有多个输出/文本显示节点被选中，则并行执行所有选中的节点"""
+        selected = [item for item in self.scene.selectedItems()
+                    if hasattr(item, 'node_type') and item.node_type in ('output', 'text_display')]
+        if len(selected) > 1:
+            for selected_node in selected:
+                self._execute_current_node(selected_node)
+        else:
+            self._execute_current_node(node)
     
     def _execute_current_node(self, node):
         """执行直接连接到该输出节点或文本显示节点的上游节点"""
