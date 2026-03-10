@@ -918,11 +918,13 @@ class EditorWindow(QMainWindow):
         
         self.setWindowTitle(f"{self.project_path.name}")
         self.setMinimumSize(1200, 800)
+        self.setCursor(Qt.ArrowCursor)
         
         self._init_ui()
         self._init_toolbar()
         self._init_shortcuts()
-        self._load_workflow()
+        
+        QTimer.singleShot(10, self._load_workflow)
     
     def _init_ui(self):
         central_widget = QWidget()
@@ -942,6 +944,8 @@ class EditorWindow(QMainWindow):
         
         self.scene = NodeScene()
         self.view = GraphicsView(self.scene)
+        self.view.setCursor(Qt.ArrowCursor)
+        self.view.viewport().setCursor(Qt.ArrowCursor)
         self.view.on_node_drop = self._on_node_drop
         self.view.on_edge_created = self._auto_save
         self.view.on_template_place = self._place_template_at
@@ -964,6 +968,17 @@ class EditorWindow(QMainWindow):
         
         self._apply_style()
         self._load_help_setting()
+        
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1a1a1a;
+                color: #e0e0e0;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 4px 10px;
+                font-size: 13px;
+            }
+        """)
+        self.statusBar().showMessage(f"项目: {self.project_path.name}")
     
     def _load_help_setting(self):
         show_help = self.config.get_show_help()
@@ -1599,36 +1614,97 @@ class EditorWindow(QMainWindow):
                 slider.valueChanged.connect(self._schedule_auto_save)
     
     def _load_workflow(self):
+        self._loading_step = 0
+        self._loading_data = None
+        self._do_load_step_1()
+    
+    def _do_load_step_1(self):
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1e3a5f;
+                color: #90CAF9;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+        """)
+        self.statusBar().showMessage("⏳ 正在加载工作流...")
+        QTimer.singleShot(50, self._do_load_step_2)
+    
+    def _do_load_step_2(self):
         try:
-            data = self.project_manager.load_workflow()
-            if data:
-                self.scene.load_from_dict(data, NODE_REGISTRY)
-                for node in self.scene.nodes.values():
-                    # 为节点设置项目路径
-                    if hasattr(node, 'set_project_path'):
-                        node.set_project_path(str(self.project_path))
-                    # 为输出节点设置执行回调
-                    if hasattr(node, 'on_execute_requested'):
-                        node.on_execute_requested = self._on_node_execute
-                    if hasattr(node, 'on_execute_current_requested'):
-                        node.on_execute_current_requested = self._on_node_execute_current
-                    # 连接节点内容变化信号到自动保存
-                    self._connect_node_signals(node)
-                
-                # 恢复视口位置
-                if "view_state" in data:
-                    view_state = data["view_state"]
-                    if "center_x" in view_state and "center_y" in view_state:
-                        self.view.centerOn(view_state["center_x"], view_state["center_y"])
-                    if "zoom" in view_state:
-                        zoom = view_state["zoom"]
-                        self.view._zoom = zoom
-                        self.view.resetTransform()
-                        self.view.scale(zoom, zoom)
-                
-                self.statusBar().showMessage("工作流已加载")
+            self._loading_data = self.project_manager.load_workflow()
+            QTimer.singleShot(10, self._do_load_step_3)
         except Exception as e:
             print(f"加载工作流失败: {str(e)}")
+            self.statusBar().setStyleSheet("""
+                QStatusBar {
+                    background-color: #5f1e1e;
+                    color: #EF9A9A;
+                    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                    padding: 4px 10px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+            """)
+            self.statusBar().showMessage(f"❌ 加载工作流失败: {str(e)}")
+    
+    def _do_load_step_3(self):
+        if self._loading_data:
+            self.scene.load_from_dict(self._loading_data, NODE_REGISTRY)
+            QTimer.singleShot(10, self._do_load_step_4)
+        else:
+            self._finish_loading()
+    
+    def _do_load_step_4(self):
+        for node in self.scene.nodes.values():
+            if hasattr(node, 'set_project_path'):
+                node.set_project_path(str(self.project_path))
+            if hasattr(node, 'on_execute_requested'):
+                node.on_execute_requested = self._on_node_execute
+            if hasattr(node, 'on_execute_current_requested'):
+                node.on_execute_current_requested = self._on_node_execute_current
+            self._connect_node_signals(node)
+        QTimer.singleShot(10, self._do_load_step_5)
+    
+    def _do_load_step_5(self):
+        if "view_state" in self._loading_data:
+            view_state = self._loading_data["view_state"]
+            if "center_x" in view_state and "center_y" in view_state:
+                self.view.centerOn(view_state["center_x"], view_state["center_y"])
+            if "zoom" in view_state:
+                zoom = view_state["zoom"]
+                self.view._zoom = zoom
+                self.view.resetTransform()
+                self.view.scale(zoom, zoom)
+        QTimer.singleShot(10, self._finish_loading)
+    
+    def _finish_loading(self):
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1a3d1a;
+                color: #81C784;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+        """)
+        self.statusBar().showMessage("✅ 工作流已加载")
+        QTimer.singleShot(2000, lambda: self._restore_status_bar())
+    
+    def _restore_status_bar(self):
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1a1a1a;
+                color: #e0e0e0;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 4px 10px;
+                font-size: 13px;
+            }
+        """)
+        self.statusBar().showMessage(f"项目: {self.project_path.name}")
     
     def _get_root_output_nodes(self, all_outputs):
         """从所有 OutputNode 中找出链的根节点（不被其他 OutputNode 的输出链覆盖的节点）。

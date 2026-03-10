@@ -1,4 +1,4 @@
-﻿"""共享的自定义 UI 组件"""
+"""共享的自定义 UI 组件"""
 
 from PyQt5.QtWidgets import (
     QPushButton, QLabel, QWidget, QVBoxLayout, QGridLayout, QMenu, QAction
@@ -70,6 +70,7 @@ class DraggableThumbnail(QLabel):
     """可拖拽的缩略图标签，通过鼠标拖放排序
     
     在 ImageThumbnailStrip 中使用，支持拖拽排序功能。
+    支持缩略图延迟加载，只在可见时加载。
     """
     
     def __init__(self, node_id, image_path, index, parent_strip):
@@ -78,6 +79,7 @@ class DraggableThumbnail(QLabel):
         self.image_path = image_path
         self.index = index
         self._parent_strip = parent_strip
+        self._pixmap_loaded = False
         
         self.setFixedSize(40, 40)
         self.setAlignment(Qt.AlignCenter)
@@ -85,13 +87,21 @@ class DraggableThumbnail(QLabel):
         self.setToolTip(f"#{index + 1} {Path(image_path).name}")
         self._update_style(False)
         
-        # 加载缩略图（使用缓存）
-        pixmap = ThumbnailCache.get(image_path, 36, 36)
+        # 延迟加载缩略图
+        QTimer.singleShot(0, self._load_thumbnail)
+    
+    def _load_thumbnail(self):
+        """延迟加载缩略图"""
+        if self._pixmap_loaded:
+            return
+        
+        pixmap = ThumbnailCache.get(self.image_path, 36, 36)
         if pixmap and not pixmap.isNull():
             self.setPixmap(pixmap)
         else:
             self.setText("?")
             self.setStyleSheet(self.styleSheet() + "color: #888; font-size: 11px;")
+        self._pixmap_loaded = True
     
     def _update_style(self, dragging):
         """更新样式状态"""
@@ -163,6 +173,17 @@ class ImageThumbnailStrip(QWidget):
         """
         old_ids = {item[0] for item in self._ordered_items}
         new_ids = {item[0] for item in connected_items}
+        
+        # 检查是否有变化
+        if old_ids == new_ids:
+            # 检查路径是否有变化
+            old_map = {item[0]: item[1] for item in self._ordered_items}
+            new_map = {item[0]: item[1] for item in connected_items}
+            if old_map == new_map:
+                # 完全没有变化，不需要更新
+                return
+        
+        # 有变化时才重建
         new_map = {item[0]: item[1] for item in connected_items}
         
         # 保留还在连接中的旧顺序项

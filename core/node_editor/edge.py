@@ -12,6 +12,8 @@ class Edge(QGraphicsPathItem):
         self.end_socket = end_socket
         self._dragging = dragging
         self._selected = False
+        self._last_start_pos = None
+        self._last_end_pos = None
         
         self.setZValue(-1)
         self.setPen(QPen(QColor("#88aaff"), 3))
@@ -39,6 +41,18 @@ class Edge(QGraphicsPathItem):
             end_pos = self.end_pos if hasattr(self, 'end_pos') else start_pos
         else:
             end_pos = start_pos
+        
+        # 检查位置是否真的变化了
+        if (self._last_start_pos is not None and 
+            self._last_end_pos is not None and
+            abs(start_pos.x() - self._last_start_pos.x()) < 0.1 and
+            abs(start_pos.y() - self._last_start_pos.y()) < 0.1 and
+            abs(end_pos.x() - self._last_end_pos.x()) < 0.1 and
+            abs(end_pos.y() - self._last_end_pos.y()) < 0.1):
+            return
+        
+        self._last_start_pos = start_pos
+        self._last_end_pos = end_pos
         
         path.moveTo(start_pos)
         

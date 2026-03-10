@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ui.project_widget import ProjectWidget
 from ui.project_dialog import NewProjectDialog
 from ui.api_settings_dialog import APISettingsDialog
+from ui.editor_window import EditorWindow
 from utils.config import Config
 from utils.project_manager import ProjectManager
 from utils.file_utils import get_available_disks
@@ -24,6 +25,7 @@ class MainWindow(QMainWindow):
         self.config = Config()
         self.project_manager = ProjectManager(self.config)
         self.editor_window = None
+        self.current_project_widget = None
         self.setWindowTitle("AI视频创作工具")
         self.setMinimumSize(1000, 700)
         
@@ -88,6 +90,16 @@ class MainWindow(QMainWindow):
         
         scroll_area.setWidget(self.projects_container)
         layout.addWidget(scroll_area)
+        
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1a1a1a;
+                color: #888;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 2px 10px;
+            }
+        """)
+        self.statusBar().showMessage("就绪")
         
         self.setStyleSheet("""
             QMainWindow {
@@ -172,7 +184,7 @@ class MainWindow(QMainWindow):
             path = Path(project_path)
             if path.exists():
                 widget = ProjectWidget(project_path)
-                widget.clicked.connect(self._open_project)
+                widget.clicked.connect(lambda p=project_path, w=widget: self._on_project_clicked(p, w))
                 widget.delete_requested.connect(self._delete_project)
                 widget.icon_imported.connect(lambda p: self._load_projects())
                 self.projects_layout.addWidget(widget, row, col)
@@ -219,16 +231,66 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"创建项目失败: {str(e)}")
     
+    def _on_project_clicked(self, project_path: str, project_widget):
+        self.current_project_widget = project_widget
+        self._open_project(project_path)
+    
     def _open_project(self, project_path: str):
         if hasattr(self, 'editor_window') and self.editor_window is not None:
             self.editor_window.close()
         
-        from ui.editor_window import EditorWindow
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1e3a5f;
+                color: #90CAF9;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+        """)
+        self.statusBar().showMessage(f"⏳ 正在打开项目 '{Path(project_path).name}'...")
         
+        if self.current_project_widget:
+            self.current_project_widget.set_loading(True)
+        
+        QTimer.singleShot(50, lambda: self._actually_open_project(project_path))
+    
+    def _actually_open_project(self, project_path: str):
         self.editor_window = EditorWindow(project_path, self)
         self.editor_window.show()
         self.editor_window.raise_()
         self.editor_window.activateWindow()
+        
+        def reset_loading():
+            if self.current_project_widget:
+                self.current_project_widget.set_loading(False)
+            self.statusBar().setStyleSheet("""
+                QStatusBar {
+                    background-color: #1a3d1a;
+                    color: #81C784;
+                    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                    padding: 4px 10px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+            """)
+            self.statusBar().showMessage(f"✅ 项目 '{Path(project_path).name}' 已打开")
+            
+            QTimer.singleShot(2000, lambda: self._restore_main_status_bar())
+        
+        QTimer.singleShot(500, reset_loading)
+    
+    def _restore_main_status_bar(self):
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1a1a1a;
+                color: #888;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                padding: 2px 10px;
+            }
+        """)
+        self.statusBar().showMessage("就绪")
     
     def _delete_project(self, project_path: str):
         project_name = Path(project_path).name

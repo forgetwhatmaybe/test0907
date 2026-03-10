@@ -96,6 +96,7 @@ class NodeItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
         self.setZValue(10)
+        self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
         
         self._setup_ui()
     

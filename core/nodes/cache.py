@@ -1,4 +1,4 @@
-﻿"""缩略图缓存管理器 - 使用 LRU 缓存策略"""
+"""缩略图缓存管理器 - 使用 LRU 缓存策略"""
 
 from collections import OrderedDict
 from PyQt5.QtGui import QPixmap, QImage
@@ -15,7 +15,7 @@ class ThumbnailCache:
     最大缓存条目数可通过环境变量 THUMBNAIL_CACHE_SIZE 调整，默认 200。
     """
     _cache = OrderedDict()  # {cache_key: QPixmap}
-    _max_cache_size = 200
+    _max_cache_size = 500
     _initialized = False
     
     @classmethod
@@ -130,8 +130,20 @@ class ThumbnailCache:
     @classmethod
     def get_stats(cls):
         """获取缓存统计信息"""
+        total_bytes = 0
+        try:
+            for pixmap in cls._cache.values():
+                if pixmap and not pixmap.isNull():
+                    # 估算内存使用：宽 x 高 x 4字节（RGB32）
+                    total_bytes += pixmap.width() * pixmap.height() * 4
+        except Exception:
+            pass
+        
+        size_mb = total_bytes / (1024 * 1024)
+        
         return {
             'size': len(cls._cache),
             'max_size': cls._max_cache_size,
-            'usage_percent': len(cls._cache) / cls._max_cache_size * 100
+            'usage_percent': len(cls._cache) / cls._max_cache_size * 100,
+            'memory_mb': round(size_mb, 2)
         }

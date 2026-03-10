@@ -189,6 +189,30 @@ class ProjectWidget(QWidget):
             }
         """)
     
+    def set_loading(self, is_loading: bool):
+        """设置项目卡片的加载状态"""
+        if is_loading:
+            self.name_label.setText(f"⏳ {self.project_name}")
+            self.setStyleSheet("""
+                ProjectWidget {
+                    background-color: #4a4a4a;
+                    border: 2px solid #2196F3;
+                    border-radius: 10px;
+                }
+            """)
+        else:
+            self.name_label.setText(self.project_name)
+            self.setStyleSheet("""
+                ProjectWidget {
+                    background-color: #2d2d2d;
+                    border-radius: 10px;
+                }
+                ProjectWidget:hover {
+                    background-color: #3a3a3a;
+                    border: 1px solid #4a4a4a;
+                }
+            """)
+    
     def leaveEvent(self, event):
         self.setStyleSheet("""
             ProjectWidget {
