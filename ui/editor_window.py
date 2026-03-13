@@ -133,9 +133,22 @@ class ExecuteThread(QThread):
     
     def _get_target_output_nodes(self, api_node):
         """获取需要保存结果的输出节点列表。
-        始终返回所有连接的输出节点，确保所有输出节点都能收到结果。
+        如果是 direct_node 模式，只返回发起执行的目标输出节点。
+        否则返回所有连接的输出节点。
         """
-        return self._find_output_nodes(api_node)
+        all_output_nodes = self._find_output_nodes(api_node)
+        
+        # 如果是直接执行模式，只返回目标输出节点
+        if self.direct_node and api_node.id == self.direct_node.id:
+            if self.target_output_nodes:
+                target_ids = {n.id for n in self.target_output_nodes}
+                filtered = [n for n in all_output_nodes if n.id in target_ids]
+                if filtered:
+                    return filtered
+            return all_output_nodes
+        
+        # 否则返回所有输出节点
+        return all_output_nodes
     
     def run(self):
         try:
@@ -812,6 +825,7 @@ class ExecuteThread(QThread):
             image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths]
         
         model = params.get("model", "gpt-5.2")
+        temperature = params.get("temperature", 0.8)
         
         if model.startswith("gpt"):
             keys = self.config.get_api_keys("gpt52")
@@ -833,6 +847,7 @@ class ExecuteThread(QThread):
                 prompt=prompt,
                 image_paths=image_paths,
                 model=model,
+                temperature=temperature,
                 is_stopped=self.isInterruptionRequested
             )
             
@@ -845,7 +860,10 @@ class ExecuteThread(QThread):
                 self.progress.emit(f"✅ 文本生成完成 (预估 {estimated_tokens} tokens)")
                 
                 # 使用信号更新文本显示节点（跨线程安全）
-                text_display_nodes = self._find_text_display_nodes(node)
+                # 获取目标输出节点列表
+                text_display_nodes = self._get_target_output_nodes(node)
+                # 过滤只保留 text_display 类型
+                text_display_nodes = [n for n in text_display_nodes if n.node_type == "text_display"]
                 for text_node in text_display_nodes:
                     self.text_display_updated.emit(text_node.id, result_text, estimated_tokens)
             else:
@@ -1323,19 +1341,39 @@ class EditorWindow(QMainWindow):
         self._auto_save()
 
     def _on_node_execute(self, output_node):
-        """右键执行：如果有多个输出节点被选中，则并行执行所有选中的输出节点"""
+        """右键执行/点击节点执行按钮：如果有多个输出/文本显示节点被选中，则并行执行所有选中的节点"""
+        # 检查是 output 节点还是 text_display 节点
+        is_text_display = hasattr(output_node, 'node_type') and output_node.node_type == 'text_display'
+        
+        # 找到当前选中的 output 或 text_display 节点
         selected = [item for item in self.scene.selectedItems()
-                    if hasattr(item, 'node_type') and item.node_type == 'output']
-        if len(selected) > 1:
-            for node in selected:
-                self._execute_workflow(output_node=node)
+                    if hasattr(item, 'node_type') and item.node_type in ('output', 'text_display')]
+        
+        # 如果没有选中，或者只有一个被点击的节点，则只执行该节点
+        if len(selected) == 0 or (len(selected) == 1 and selected[0] == output_node):
+            # 对于文本显示节点，使用"执行当前节点"的逻辑
+            if is_text_display:
+                self._on_node_execute_current(output_node)
+            else:
+                self._execute_workflow(output_node=output_node)
         else:
-            self._execute_workflow(output_node=output_node)
+            # 多个选中，执行所有选中的节点
+            for node in selected:
+                is_text_node = hasattr(node, 'node_type') and node.node_type == 'text_display'
+                if is_text_node:
+                    self._on_node_execute_current(node)
+                else:
+                    self._execute_workflow(output_node=node)
     
     def _on_node_execute_current(self, node):
         """执行当前节点连接的上游节点：如果有多个输出/文本显示节点被选中，则并行执行所有选中的节点"""
         selected = [item for item in self.scene.selectedItems()
                     if hasattr(item, 'node_type') and item.node_type in ('output', 'text_display')]
+        
+        # 确保当前节点在选中列表中
+        if node not in selected:
+            selected.append(node)
+        
         if len(selected) > 1:
             for selected_node in selected:
                 self._execute_current_node(selected_node)
@@ -1368,10 +1406,15 @@ class EditorWindow(QMainWindow):
         # 创建并提交任务，只执行该直接连接的API节点
         task_id = node.id
         existing = self.task_queue.tasks.get(task_id)
-        if existing and existing["state"].name == "RUNNING":
-            node_name = node.get_output_name() if hasattr(node, 'get_output_name') else (node.title if hasattr(node, 'title') else '节点')
-            self.statusBar().showMessage(f"⏳ {node_name} 正在执行中")
-            return
+        if existing:
+            from ui.task_queue import TaskState
+            if existing["state"] == TaskState.RUNNING:
+                node_name = node.get_output_name() if hasattr(node, 'get_output_name') else (node.title if hasattr(node, 'title') else '节点')
+                self.statusBar().showMessage(f"⏳ {node_name} 正在执行中")
+                return
+            # 如果任务已经完成或失败,先清除它
+            if existing["state"] in (TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED):
+                self.task_queue.remove_finished()
         
         # 获取输出名称
         if hasattr(node, 'get_output_name'):

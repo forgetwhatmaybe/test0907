@@ -15,6 +15,7 @@ class TextDisplayNode(NodeItem):
     执行完成后显示生成的文本。
     """
     node_type = "text_display"
+    _counter = 0
     
     def __init__(self):
         self.display_text = ""
@@ -185,6 +186,17 @@ class TextDisplayNode(NodeItem):
         btn_layout.addWidget(self.execute_btn)
         
         layout.addLayout(btn_layout)
+    
+    def set_unique_name(self, existing_names=None):
+        if existing_names is None:
+            existing_names = set()
+        
+        counter = TextDisplayNode._counter + 1
+        while f"text_output_{counter}" in existing_names:
+            counter += 1
+        
+        self.name_edit.setText(f"text_output_{counter}")
+        TextDisplayNode._counter = counter
     
     def get_output_name(self):
         return self.name_edit.text() or "text_output"

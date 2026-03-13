@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import (
-    QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QComboBox
+    QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QComboBox, QSlider
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
@@ -22,6 +22,8 @@ class TextVisionNode(NodeItem):
         self.generated_text = ""
         self._image_order = []
         self._estimated_tokens = 0
+        self._thumbnails_expanded = True
+        self._temperature = 0.8
         
         super().__init__("文本识图")
         self.add_multi_input("参考图片")
@@ -31,6 +33,7 @@ class TextVisionNode(NodeItem):
             self.inputs[0].signals.connected.connect(self._on_edge_changed)
             self.inputs[0].signals.disconnected.connect(self._on_edge_changed)
         
+        self._add_toggle_button()
         self._update_size()
     
     def _setup_content(self):
@@ -103,12 +106,41 @@ class TextVisionNode(NodeItem):
         """)
         layout.addWidget(self.prompt_edit)
         
+        temp_layout = QHBoxLayout()
+        temp_label = QLabel("温度:")
+        temp_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        temp_layout.addWidget(temp_label)
+        
+        self.temp_slider = QSlider(Qt.Horizontal)
+        self.temp_slider.setRange(0, 200)
+        self.temp_slider.setValue(int(self._temperature * 100))
+        self.temp_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                background: #444; height: 6px; border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #4CAF50; width: 14px; height: 14px;
+                border-radius: 7px; margin: -4px 0;
+            }
+        """)
+        self.temp_slider.valueChanged.connect(self._on_temp_changed)
+        temp_layout.addWidget(self.temp_slider)
+        
+        self.temp_value_label = QLabel(f"{self._temperature:.1f}")
+        self.temp_value_label.setStyleSheet("color: #aaa; font-size: 11px; min-width: 30px;")
+        temp_layout.addWidget(self.temp_value_label)
+        layout.addLayout(temp_layout)
+        
         token_layout = QHBoxLayout()
         self.token_label = QLabel("预估Token: 0")
         self.token_label.setStyleSheet("color: #4CAF50; font-size: 11px;")
         token_layout.addWidget(self.token_label)
         token_layout.addStretch()
         layout.addLayout(token_layout)
+    
+    def _on_temp_changed(self, value):
+        self._temperature = value / 100.0
+        self.temp_value_label.setText(f"{self._temperature:.1f}")
     
     def _on_prompt_changed(self):
         doc = self.prompt_edit.document()
@@ -142,8 +174,17 @@ class TextVisionNode(NodeItem):
         
         self.thumbnail_strip.update_thumbnails(connected_items)
         has_images = len(connected_items) > 0
-        self.thumb_label.setVisible(has_images)
+        self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
+        self.thumbnail_strip.setVisible(self._thumbnails_expanded)
         self._update_token_estimate()
+        self._update_size()
+    
+    def _on_toggle_clicked(self):
+        """展开/收起缩略图区域"""
+        self._thumbnails_expanded = not self._thumbnails_expanded
+        has_images = self.thumbnail_strip and len(self.thumbnail_strip._ordered_items) > 0
+        self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
+        self.thumbnail_strip.setVisible(self._thumbnails_expanded)
         self._update_size()
     
     def _on_image_order_changed(self):
@@ -175,6 +216,7 @@ class TextVisionNode(NodeItem):
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
+            "temperature": self._temperature,
         }
     
     def set_generated_text(self, text):
@@ -186,6 +228,7 @@ class TextVisionNode(NodeItem):
             "model": self.model_combo.currentText(),
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
             "generated_text": self.generated_text,
+            "temperature": self._temperature,
         }
     
     def deserialize_data(self, data):
@@ -194,6 +237,11 @@ class TextVisionNode(NodeItem):
         model_index = self.model_combo.findText(data.get("model", "gpt-5.4"))
         if model_index >= 0:
             self.model_combo.setCurrentIndex(model_index)
+        
+        self._temperature = data.get("temperature", 0.8)
+        if hasattr(self, 'temp_slider'):
+            self.temp_slider.setValue(int(self._temperature * 100))
+            self.temp_value_label.setText(f"{self._temperature:.1f}")
         
         self.generated_text = data.get("generated_text", "")
         self._image_order = data.get("image_order", [])

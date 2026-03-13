@@ -1,4 +1,4 @@
-﻿"""Gemini (香蕉生图) API 节点"""
+"""Gemini (香蕉生图) API 节点"""
 
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QComboBox
 from PyQt5.QtCore import QTimer
@@ -16,6 +16,7 @@ class GeminiAPINode(NodeItem):
     def __init__(self):
         self.generated_image_path = ""
         self._image_order = []
+        self._thumbnails_expanded = True
         
         super().__init__("香蕉生图")
         self.add_multi_input("参考图片")
@@ -25,6 +26,7 @@ class GeminiAPINode(NodeItem):
             self.inputs[0].signals.connected.connect(self._on_edge_changed)
             self.inputs[0].signals.disconnected.connect(self._on_edge_changed)
         
+        self._add_toggle_button()
         self._update_size()
     
     def _setup_content(self):
@@ -142,7 +144,16 @@ class GeminiAPINode(NodeItem):
         
         self.thumbnail_strip.update_thumbnails(connected_items)
         has_images = len(connected_items) > 0
-        self.thumb_label.setVisible(has_images)
+        self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
+        self.thumbnail_strip.setVisible(self._thumbnails_expanded)
+        self._update_size()
+    
+    def _on_toggle_clicked(self):
+        """展开/收起缩略图区域"""
+        self._thumbnails_expanded = not self._thumbnails_expanded
+        has_images = self.thumbnail_strip and len(self.thumbnail_strip._ordered_items) > 0
+        self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
+        self.thumbnail_strip.setVisible(self._thumbnails_expanded)
         self._update_size()
     
     def _on_image_order_changed(self):

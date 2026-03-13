@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
 from PyQt5.QtGui import QPixmap, QCursor, QStandardItem, QStandardItemModel, QColor, QIcon, QImage, QBrush
 from core.node_editor.node_item import NodeItem
+from .widgets import ImageThumbnailStrip, DraggableThumbnail
 from pathlib import Path
 import shutil
 import os
@@ -142,255 +143,6 @@ class DoubleClickButton(QPushButton):
             drag.setPixmap(self.icon().pixmap(64, 64))
         
         drag.exec_(Qt.CopyAction)
-
-
-class DraggableThumbnail(QLabel):
-    """可拖拽的缩略图标签，通过鼠标拖放排序"""
-    
-    def __init__(self, node_id, image_path, index, parent_strip):
-        super().__init__()
-        self.node_id = node_id
-        self.image_path = image_path
-        self.index = index
-        self._parent_strip = parent_strip
-        
-        self.setFixedSize(40, 40)
-        self.setAlignment(Qt.AlignCenter)
-        self.setCursor(Qt.OpenHandCursor)
-        self.setToolTip(f"#{index + 1} {Path(image_path).name}")
-        self._update_style(False)
-        
-        # 加载缩略图（使用缓存）
-        pixmap = ThumbnailCache.get(image_path, 36, 36)
-        if pixmap and not pixmap.isNull():
-            self.setPixmap(pixmap)
-        else:
-            self.setText("?")
-            self.setStyleSheet(self.styleSheet() + "color: #888; font-size: 11px;")
-    
-    def _update_style(self, dragging):
-        if dragging:
-            self.setStyleSheet("""
-                QLabel {
-                    border: 2px solid #FF9800;
-                    border-radius: 4px;
-                    background-color: #333;
-                    opacity: 0.7;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QLabel {
-                    border: 2px solid #555;
-                    border-radius: 4px;
-                    background-color: #1a1a1a;
-                }
-                QLabel:hover {
-                    border: 2px solid #FF9800;
-                }
-            """)
-    
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.setCursor(Qt.ClosedHandCursor)
-            self._update_style(True)
-            self._parent_strip._start_drag(self.index, event.globalPos())
-            event.accept()  # 阻止事件冒泡到 NodeItem（防止拖动节点）
-            return
-        super().mousePressEvent(event)
-    
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
-            self._parent_strip._update_drag(event.globalPos())
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-    
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.setCursor(Qt.OpenHandCursor)
-            self._update_style(False)
-            self._parent_strip._finish_drag(event.globalPos())
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-
-class ImageThumbnailStrip(QWidget):
-    """可拖拽排序的图片缩略图条，显示在提示词上方
-    
-    使用鼠标事件（非 QDrag）实现拖拽排序，
-    因为 QGraphicsProxyWidget 内部无法正常使用 QDrag。
-    使用 QGridLayout 实现自动换行，每行4张缩略图。
-    """
-    
-    order_changed = pyqtSignal()  # 排序改变信号
-    COLS = 4  # 每行显示4张
-    THUMB_SIZE = 40
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._ordered_items = []  # [(node_id, image_path), ...]
-        self._dragging = False
-        self._drag_source_idx = -1
-        self._drag_start_global = None
-        self._highlight_idx = -1  # 当前高亮的目标位置
-        
-        self._grid_layout = QGridLayout(self)
-        self._grid_layout.setContentsMargins(2, 2, 2, 2)
-        self._grid_layout.setSpacing(3)
-        
-        self.setFixedHeight(0)  # 无图片时隐藏
-    
-    # ---- 外部接口 ----
-    
-    def update_thumbnails(self, connected_items):
-        """更新缩略图列表
-        connected_items: [(node_id, image_path), ...] 当前所有连接的图片
-        """
-        old_ids = {item[0] for item in self._ordered_items}
-        new_ids = {item[0] for item in connected_items}
-        new_map = {item[0]: item[1] for item in connected_items}
-        
-        # 保留还在连接中的旧顺序项
-        kept = [(nid, new_map[nid]) for nid, _ in self._ordered_items if nid in new_ids]
-        
-        # 追加新连接的到末尾
-        added_ids = new_ids - old_ids
-        for nid, path in connected_items:
-            if nid in added_ids:
-                kept.append((nid, path))
-        
-        self._ordered_items = kept
-        self._rebuild_widgets()
-    
-    def get_ordered_node_ids(self):
-        return [nid for nid, _ in self._ordered_items]
-    
-    def get_ordered_image_paths(self):
-        return [path for _, path in self._ordered_items]
-    
-    def set_order(self, node_ids):
-        id_map = {nid: path for nid, path in self._ordered_items}
-        reordered = []
-        used = set()
-        for nid in node_ids:
-            if nid in id_map and nid not in used:
-                reordered.append((nid, id_map[nid]))
-                used.add(nid)
-        for nid, path in self._ordered_items:
-            if nid not in used:
-                reordered.append((nid, path))
-        self._ordered_items = reordered
-        self._rebuild_widgets()
-    
-    # ---- 内部构建 ----
-    
-    def _rebuild_widgets(self):
-        while self._grid_layout.count():
-            item = self._grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        if not self._ordered_items:
-            self.setFixedHeight(0)
-            return
-        
-        for i, (node_id, path) in enumerate(self._ordered_items):
-            thumb = DraggableThumbnail(node_id, path, i, self)
-            row = i // self.COLS
-            col = i % self.COLS
-            self._grid_layout.addWidget(thumb, row, col)
-        
-        count = len(self._ordered_items)
-        rows = (count + self.COLS - 1) // self.COLS
-        row_height = self.THUMB_SIZE + 6
-        self.setFixedHeight(rows * row_height + 6)
-    
-    # ---- 鼠标拖拽排序（由 DraggableThumbnail 触发） ----
-    
-    def _start_drag(self, source_idx, global_pos):
-        """DraggableThumbnail.mousePressEvent 调用"""
-        self._dragging = True
-        self._drag_source_idx = source_idx
-        self._drag_start_global = global_pos
-        self._highlight_idx = source_idx
-    
-    def _update_drag(self, global_pos):
-        """DraggableThumbnail.mouseMoveEvent 调用"""
-        if not self._dragging:
-            return
-        target_idx = self._find_closest_index(self.mapFromGlobal(global_pos))
-        if target_idx != self._highlight_idx:
-            self._highlight_idx = target_idx
-            self._update_highlight(target_idx)
-    
-    def _finish_drag(self, global_pos):
-        """DraggableThumbnail.mouseReleaseEvent 调用"""
-        if not self._dragging:
-            return
-        self._dragging = False
-        
-        target_idx = self._find_closest_index(self.mapFromGlobal(global_pos))
-        source_idx = self._drag_source_idx
-        self._drag_source_idx = -1
-        self._highlight_idx = -1
-        
-        if source_idx < 0 or source_idx == target_idx:
-            self._rebuild_widgets()
-            return
-        
-        # 移动元素
-        item = self._ordered_items.pop(source_idx)
-        if target_idx > source_idx:
-            target_idx -= 1
-        target_idx = max(0, min(target_idx, len(self._ordered_items)))
-        self._ordered_items.insert(target_idx, item)
-        
-        self._rebuild_widgets()
-        self.order_changed.emit()
-    
-    def _find_closest_index(self, local_pos):
-        """根据鼠标在 strip 内的位置，找到最近的缩略图索引"""
-        if not self._ordered_items:
-            return 0
-        
-        min_dist = float('inf')
-        target_idx = len(self._ordered_items)
-        
-        for i in range(self._grid_layout.count()):
-            w = self._grid_layout.itemAt(i).widget()
-            if w and isinstance(w, DraggableThumbnail):
-                center = w.geometry().center()
-                dx = local_pos.x() - center.x()
-                dy = local_pos.y() - center.y()
-                dist = dx * dx + dy * dy
-                if dist < min_dist:
-                    min_dist = dist
-                    # 在左半部分→插到前面，右半部分→插到后面
-                    if local_pos.x() < center.x():
-                        target_idx = w.index
-                    else:
-                        target_idx = w.index + 1
-        return target_idx
-    
-    def _update_highlight(self, target_idx):
-        """高亮目标位置的缩略图边框"""
-        for i in range(self._grid_layout.count()):
-            w = self._grid_layout.itemAt(i).widget()
-            if w and isinstance(w, DraggableThumbnail):
-                if w.index == target_idx and w.index != self._drag_source_idx:
-                    w.setStyleSheet("""
-                        QLabel {
-                            border: 2px solid #4CAF50;
-                            border-radius: 4px;
-                            background-color: #1a1a1a;
-                        }
-                    """)
-                elif w.index == self._drag_source_idx:
-                    w._update_style(True)  # 保持拖拽中样式
-                else:
-                    w._update_style(False)
 
 
 class MaskEditorDialog(QDialog):
@@ -1648,6 +1400,7 @@ class GeminiAPINode(NodeItem):
         self._upper_text = ""  # 上方输入的文本
         self._show_text_input = False  # 是否显示文本输入口
         self._text_input_socket = None  # 文本输入socket引用
+        self._thumbnails_expanded = True
         
         super().__init__("香蕉生图")
         self.add_multi_input("参考图片")  # 橙色多连接输入
@@ -1658,6 +1411,7 @@ class GeminiAPINode(NodeItem):
             self.inputs[0].signals.connected.connect(self._on_edge_changed)
             self.inputs[0].signals.disconnected.connect(self._on_edge_changed)
         
+        self._add_toggle_button()
         self._update_size()
     
     def _setup_content(self):
@@ -1958,7 +1712,16 @@ class GeminiAPINode(NodeItem):
         
         self.thumbnail_strip.update_thumbnails(connected_items)
         has_images = len(connected_items) > 0
-        self.thumb_label.setVisible(has_images)
+        self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
+        self.thumbnail_strip.setVisible(self._thumbnails_expanded)
+        self._update_size()
+    
+    def _on_toggle_clicked(self):
+        """展开/收起缩略图区域"""
+        self._thumbnails_expanded = not self._thumbnails_expanded
+        has_images = self.thumbnail_strip and len(self.thumbnail_strip._ordered_items) > 0
+        self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
+        self.thumbnail_strip.setVisible(self._thumbnails_expanded)
         self._update_size()
     
     def get_upper_text(self):

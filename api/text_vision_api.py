@@ -60,6 +60,7 @@ class TextVisionAPI:
         prompt: str,
         image_paths: List[str] = None,
         model: str = "gpt-5.4",
+        temperature: float = 0.8,
         is_stopped=None
     ) -> Optional[str]:
         """调用API生成文本
@@ -77,15 +78,16 @@ class TextVisionAPI:
             return None
         
         if model.startswith("gpt"):
-            return self._call_gpt_api(prompt, image_paths, model, is_stopped)
+            return self._call_gpt_api(prompt, image_paths, model, temperature, is_stopped)
         else:
-            return self._call_gemini_api(prompt, image_paths, model, is_stopped)
+            return self._call_gemini_api(prompt, image_paths, model, temperature, is_stopped)
     
     def _call_gpt_api(
         self,
         prompt: str,
         image_paths: List[str],
         model: str,
+        temperature: float = 0.8,
         is_stopped=None
     ) -> Optional[str]:
         """调用GPT-5.4 API"""
@@ -115,7 +117,8 @@ class TextVisionAPI:
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": content}
             ],
-            "max_tokens": 4096
+            "max_tokens": 4096,
+            "temperature": temperature
         }
         
         try:
@@ -143,6 +146,7 @@ class TextVisionAPI:
         prompt: str,
         image_paths: List[str],
         model: str,
+        temperature: float = 0.8,
         is_stopped=None
     ) -> Optional[str]:
         """调用Gemini-3 Flash API"""

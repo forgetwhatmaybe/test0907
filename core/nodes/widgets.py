@@ -1,14 +1,63 @@
 """共享的自定义 UI 组件"""
 
 from PyQt5.QtWidgets import (
-    QPushButton, QLabel, QWidget, QVBoxLayout, QGridLayout, QMenu, QAction
+    QPushButton, QLabel, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QMenu, QAction,
+    QDialog, QScrollArea, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QTimer
-from PyQt5.QtGui import QDrag, QCursor, QColor, QIcon
+from PyQt5.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QTimer, QSize
+from PyQt5.QtGui import QDrag, QCursor, QColor, QIcon, QPixmap, QPainter
 from pathlib import Path
 
 from .cache import ThumbnailCache
 from . import styles
+
+
+class ImagePreviewDialog(QDialog):
+    """大图预览对话框"""
+    
+    def __init__(self, image_path, parent=None):
+        super().__init__(parent)
+        self.image_path = image_path
+        self.setWindowTitle("图片预览")
+        self.setMinimumSize(600, 600)
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setAlignment(Qt.AlignCenter)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: #1a1a1a;
+                border: none;
+            }
+        """)
+        
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("background-color: transparent;")
+        
+        scroll.setWidget(self.image_label)
+        layout.addWidget(scroll)
+        
+        self._load_image()
+    
+    def _load_image(self):
+        if Path(self.image_path).exists():
+            pixmap = QPixmap(self.image_path)
+            if not pixmap.isNull():
+                screen = QApplication.primaryScreen()
+                screen_size = screen.availableGeometry().size()
+                max_size = QSize(int(screen_size.width() * 0.8), int(screen_size.height() * 0.8))
+                
+                if pixmap.width() > max_size.width() or pixmap.height() > max_size.height():
+                    pixmap = pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                
+                self.image_label.setPixmap(pixmap)
+                self.resize(min(pixmap.width() + 50, 800), min(pixmap.height() + 50, 800))
 
 
 class DoubleClickButton(QPushButton):
@@ -71,7 +120,10 @@ class DraggableThumbnail(QLabel):
     
     在 ImageThumbnailStrip 中使用，支持拖拽排序功能。
     支持缩略图延迟加载，只在可见时加载。
+    点击右上角小眼睛可以显示大图预览。
     """
+    
+    preview_clicked = pyqtSignal(str)  # 发射 image_path
     
     def __init__(self, node_id, image_path, index, parent_strip):
         super().__init__()
@@ -80,12 +132,37 @@ class DraggableThumbnail(QLabel):
         self.index = index
         self._parent_strip = parent_strip
         self._pixmap_loaded = False
+        self._drag_start_pos = None
+        self._is_dragging = False
         
         self.setFixedSize(40, 40)
         self.setAlignment(Qt.AlignCenter)
         self.setCursor(Qt.OpenHandCursor)
-        self.setToolTip(f"#{index + 1} {Path(image_path).name}")
+        self.setToolTip(f"#{index + 1} {Path(image_path).name}\n拖拽排序，点击右上角👁预览")
         self._update_style(False)
+        
+        # 创建预览按钮（放在右上角）
+        self.preview_btn = QPushButton("👁", self)
+        self.preview_btn.setFixedSize(14, 14)
+        self.preview_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(60, 60, 60, 220);
+                color: white;
+                border: none;
+                border-radius: 2px;
+                font-size: 9px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: rgba(80, 80, 80, 240);
+            }
+            QPushButton:pressed {
+                background-color: rgba(100, 100, 100, 255);
+            }
+        """)
+        self.preview_btn.setCursor(Qt.PointingHandCursor)
+        self.preview_btn.clicked.connect(lambda: self.preview_clicked.emit(self.image_path))
+        self.preview_btn.move(26, 0)  # 放在右上角
         
         # 延迟加载缩略图
         QTimer.singleShot(0, self._load_thumbnail)
@@ -112,6 +189,8 @@ class DraggableThumbnail(QLabel):
     
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            self._is_dragging = False
             self.setCursor(Qt.ClosedHandCursor)
             self._update_style(True)
             self._parent_strip._start_drag(self.index, event.globalPos())
@@ -120,8 +199,11 @@ class DraggableThumbnail(QLabel):
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
-            self._parent_strip._update_drag(event.globalPos())
+        if event.buttons() & Qt.LeftButton and self._drag_start_pos is not None:
+            distance = (event.pos() - self._drag_start_pos).manhattanLength()
+            if distance >= 10:
+                self._is_dragging = True
+                self._parent_strip._update_drag(event.globalPos())
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -131,6 +213,8 @@ class DraggableThumbnail(QLabel):
             self.setCursor(Qt.OpenHandCursor)
             self._update_style(False)
             self._parent_strip._finish_drag(event.globalPos())
+            self._drag_start_pos = None
+            self._is_dragging = False
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -164,6 +248,12 @@ class ImageThumbnailStrip(QWidget):
         self._grid_layout.setSpacing(3)
         
         self.setFixedHeight(0)  # 无图片时隐藏
+    
+    def _on_thumbnail_clicked(self, image_path):
+        """缩略图预览按钮被点击时显示大图预览"""
+        if Path(image_path).exists():
+            dialog = ImagePreviewDialog(image_path)
+            dialog.exec_()
     
     def update_thumbnails(self, connected_items):
         """更新缩略图列表
@@ -236,13 +326,14 @@ class ImageThumbnailStrip(QWidget):
         
         for i, (node_id, path) in enumerate(self._ordered_items):
             thumb = DraggableThumbnail(node_id, path, i, self)
+            thumb.preview_clicked.connect(self._on_thumbnail_clicked)
             row = i // self.COLS
             col = i % self.COLS
             self._grid_layout.addWidget(thumb, row, col)
         
         count = len(self._ordered_items)
         rows = (count + self.COLS - 1) // self.COLS
-        row_height = self.THUMB_SIZE + 6
+        row_height = 48  # 调整高度以适应新的组件尺寸
         self.setFixedHeight(rows * row_height + 6)
     
     # ---- 鼠标拖拽排序（由 DraggableThumbnail 触发） ----

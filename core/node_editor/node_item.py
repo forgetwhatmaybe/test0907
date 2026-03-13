@@ -1,12 +1,72 @@
-from PyQt5.QtWidgets import QGraphicsItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsProxyWidget, QLabel, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog
+from PyQt5.QtWidgets import QGraphicsItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsProxyWidget, QLabel, QPushButton, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QGraphicsRectItem
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QObject, QTimer
-from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainter, QPainterPath, QLinearGradient
+from PyQt5.QtGui import QPen, QBrush, QColor, QFont, QPainter, QPainterPath, QLinearGradient, QFontMetrics
 import uuid
 
 
 class SocketSignal(QObject):
     connected = pyqtSignal(object)
     disconnected = pyqtSignal(object)
+
+
+class ToggleButtonSignals(QObject):
+    """ToggleButton 的信号对象"""
+    clicked = pyqtSignal()
+
+
+class ToggleButton(QGraphicsRectItem):
+    """展开/收起按钮"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._is_expanded = True
+        self.signals = ToggleButtonSignals()
+        self.setRect(0, 0, 24, 24)
+        self.setAcceptHoverEvents(True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, False)
+        self.setBrush(QBrush(QColor("#3a3a3a")))
+        self.setPen(QPen(QColor("#5a5a5a"), 1))
+        self.setZValue(100)
+    
+    def set_expanded(self, expanded):
+        self._is_expanded = expanded
+        self.update()
+    
+    def is_expanded(self):
+        return self._is_expanded
+    
+    def paint(self, painter, option, widget):
+        super().paint(painter, option, widget)
+        
+        painter.setPen(QPen(QColor("#ffffff"), 2))
+        center_x = int(self.rect().center().x())
+        center_y = int(self.rect().center().y())
+        
+        if self._is_expanded:
+            painter.drawLine(center_x - 5, center_y - 2, center_x + 5, center_y - 2)
+            painter.drawLine(center_x - 5, center_y + 2, center_x + 5, center_y + 2)
+        else:
+            painter.drawLine(center_x - 5, center_y, center_x + 5, center_y)
+            painter.drawLine(center_x, center_y - 5, center_x, center_y + 5)
+    
+    def hoverEnterEvent(self, event):
+        self.setBrush(QBrush(QColor("#4a4a4a")))
+        self.setPen(QPen(QColor("#6a6a6a"), 1))
+        super().hoverEnterEvent(event)
+    
+    def hoverLeaveEvent(self, event):
+        self.setBrush(QBrush(QColor("#3a3a3a")))
+        self.setPen(QPen(QColor("#5a5a5a"), 1))
+        super().hoverLeaveEvent(event)
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._is_expanded = not self._is_expanded
+            self.update()
+            self.signals.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class Socket(QGraphicsEllipseItem):
@@ -88,6 +148,7 @@ class NodeItem(QGraphicsItem):
         self._title_item = None
         self._content_widget = None
         self._proxy = None
+        self._toggle_button = None
         
         # 标记是否正在执行Ctrl+点击全选操作
         self._is_selecting_connected = False
@@ -125,6 +186,20 @@ class NodeItem(QGraphicsItem):
         label.setStyleSheet("color: white;")
         layout.addWidget(label)
     
+    def _add_toggle_button(self):
+        """添加展开/收起按钮，由子类调用"""
+        self._toggle_button = ToggleButton(self)
+        self._toggle_button.signals.clicked.connect(self._on_toggle_clicked)
+        self._update_toggle_button_position()
+    
+    def _update_toggle_button_position(self):
+        if self._toggle_button:
+            self._toggle_button.setPos(self.width - 28, 3)
+    
+    def _on_toggle_clicked(self):
+        """展开/收起按钮点击回调，由子类重写"""
+        pass
+    
     def _update_size(self):
         self.prepareGeometryChange()
         if self._content_widget:
@@ -133,6 +208,7 @@ class NodeItem(QGraphicsItem):
             self.height = max(120, content_size.height() + 60)
             self.width = max(220, content_size.width() + 40)
         self.update_sockets_position()
+        self._update_toggle_button_position()
         self.update()
         # socket 位置改变后立即刷新已连接的连线，避免显示偏差
         for socket in self.inputs + self.outputs:
