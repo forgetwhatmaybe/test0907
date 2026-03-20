@@ -20,7 +20,7 @@ class Config:
             return
         self._initialized = True
         
-        self.config_dir = Path.home() / ".tapnow"
+        self.config_dir = Path.home() / ".lanhao"
         self.config_file = self.config_dir / "config.json"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         

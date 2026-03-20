@@ -13,7 +13,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     
-    server_name = "TapNow_SingleInstance"
+    server_name = "LanHao_SingleInstance"
     socket = QLocalSocket()
     socket.connectToServer(server_name)
     
