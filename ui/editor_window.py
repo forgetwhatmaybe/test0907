@@ -528,6 +528,8 @@ class ExecuteThread(QThread):
         prompt = node.get_upper_text()
         if not prompt:
             prompt = params.get("prompt", "")
+        if hasattr(node, 'build_styled_prompt'):
+            prompt = node.build_styled_prompt(prompt)
         if not prompt:
             raise Exception(f"节点 '{node.title}' 没有设置提示词")
         
@@ -1346,8 +1348,27 @@ class EditorWindow(QMainWindow):
         paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
         paste_shortcut.activated.connect(self._paste_nodes)
         
+        select_all_shortcut = QShortcut(QKeySequence("Ctrl+A"), self)
+        select_all_shortcut.activated.connect(self._select_all_nodes)
+
         save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         save_shortcut.activated.connect(self._save_workflow)
+
+    def _select_all_nodes(self):
+        from PyQt5.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit
+
+        focus_widget = QApplication.focusWidget()
+        if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            return
+
+        if not self.scene.nodes:
+            self.statusBar().showMessage("当前没有可选中的节点")
+            return
+
+        self.scene.clearSelection()
+        for node in self.scene.nodes.values():
+            node.setSelected(True)
+        self.statusBar().showMessage(f"已全选 {len(self.scene.nodes)} 个节点")
     
     def _on_image_file_drop(self, file_paths, pos):
         """图片文件被拖入画布时：单张就近加载到已有ImageNode，多张创建多个新节点"""
@@ -1381,14 +1402,15 @@ class EditorWindow(QMainWindow):
         else:
             # 多张图片：每张创建一个新节点，纵向排列
             self._save_undo_state()
-            spacing_y = 200  # 节点间纵向间距
-            for i, file_path in enumerate(file_paths):
+            current_y = pos.y()
+            for file_path in file_paths:
                 node = ImageNode()
-                node.setPos(QPointF(pos.x(), pos.y() + i * spacing_y))
+                node.setPos(QPointF(pos.x(), current_y))
                 if hasattr(node, 'set_project_path'):
                     node.set_project_path(str(self.project_path))
                 node.load_image_file(file_path)
                 self.scene.add_node(node)
+                current_y += max(node.height + 40, 240)
             self._auto_save()
 
     def _on_video_file_drop(self, file_paths, pos):
@@ -1412,42 +1434,11 @@ class EditorWindow(QMainWindow):
             self._save_undo_state()
             node = node_class()
             node.setPos(pos)
-            if hasattr(node, 'set_project_path'):
-                node.set_project_path(str(self.project_path))
-            if hasattr(node, 'set_unique_name'):
-                existing_names = set()
-                for n in self.scene.nodes.values():
-                    if hasattr(n, 'get_output_name'):
-                        existing_names.add(n.get_output_name())
-                if hasattr(node, 'name_edit'):
-                    existing_names.add(node.name_edit.text())
-                node.set_unique_name(existing_names)
-            if hasattr(node, 'on_execute_requested'):
-                node.on_execute_requested = self._on_node_execute
-            if hasattr(node, 'on_execute_current_requested'):
-                node.on_execute_current_requested = self._on_node_execute_current
-            self._connect_node_signals(node)
+            self._prepare_new_node(node)
             self.scene.add_node(node)
             self._auto_save()
-    
-    def _on_edge_drop_create(self, node_type, scene_pos, source_socket, source_type):
-        """拖线到空白处松开后，创建新节点并自动与来源 socket 连线"""
-        from core.node_editor.edge import Edge
 
-        node_class = NODE_REGISTRY.get(node_type)
-        if not node_class:
-            return
-
-        self._save_undo_state()
-        node = node_class()
-        # 根据拖线方向偏移节点位置，使 socket 对准鼠标释放点
-        if source_type == 'output':
-            # 新节点在右侧，输入 socket 在左侧，向右偏移一点
-            node.setPos(scene_pos.x() + 20, scene_pos.y() - node.height / 2)
-        else:
-            # 新节点在左侧，输出 socket 在右侧
-            node.setPos(scene_pos.x() - node.width - 20, scene_pos.y() - node.height / 2)
-
+    def _prepare_new_node(self, node):
         if hasattr(node, 'set_project_path'):
             node.set_project_path(str(self.project_path))
         if hasattr(node, 'set_unique_name'):
@@ -1455,12 +1446,101 @@ class EditorWindow(QMainWindow):
             for n in self.scene.nodes.values():
                 if hasattr(n, 'get_output_name'):
                     existing_names.add(n.get_output_name())
+            if hasattr(node, 'name_edit'):
+                existing_names.add(node.name_edit.text())
             node.set_unique_name(existing_names)
         if hasattr(node, 'on_execute_requested'):
             node.on_execute_requested = self._on_node_execute
         if hasattr(node, 'on_execute_current_requested'):
             node.on_execute_current_requested = self._on_node_execute_current
         self._connect_node_signals(node)
+        return node
+
+    def _create_edge(self, out_socket, in_socket):
+        if not getattr(in_socket, 'multi_input', False):
+            for edge in in_socket.edges[:]:
+                edge.remove()
+        new_edge = Edge(out_socket, in_socket)
+        self.scene.add_edge(new_edge)
+        return new_edge
+
+    def _position_edge_drop_node(self, node, scene_pos, source_type, reference_node=None):
+        if source_type == 'output':
+            x = scene_pos.x() + 20
+            if reference_node is None:
+                y = scene_pos.y() - node.height / 2
+            else:
+                y = reference_node.pos().y() + max((reference_node.height - node.height) / 2, 0)
+        else:
+            x = scene_pos.x() - node.width - 20
+            if reference_node is None:
+                y = scene_pos.y() - node.height / 2
+            else:
+                y = reference_node.pos().y() + max((reference_node.height - node.height) / 2, 0)
+        node.setPos(x, y)
+
+    def _get_batch_edge_drop_sources(self, node_type, source_socket, source_type):
+        if source_type != 'output' or source_socket is None:
+            return []
+
+        source_node = source_socket.node
+        if node_type == 'gemini_api' and getattr(source_node, 'node_type', '') == 'image':
+            selected = [
+                item for item in self.scene.selectedItems()
+                if getattr(item, 'node_type', '') == 'image'
+            ]
+            if source_node in selected and len(selected) > 1:
+                return sorted(selected, key=lambda item: item.pos().y())
+
+        if node_type == 'output' and getattr(source_node, 'node_type', '') == 'gemini_api':
+            selected = [
+                item for item in self.scene.selectedItems()
+                if getattr(item, 'node_type', '') == 'gemini_api'
+            ]
+            if source_node in selected and len(selected) > 1:
+                return sorted(selected, key=lambda item: item.pos().y())
+
+        return []
+
+    def _create_batch_edge_drop_nodes(self, node_type, scene_pos, source_socket, source_type, source_nodes):
+        node_class = NODE_REGISTRY.get(node_type)
+        if not node_class:
+            return False
+
+        source_index = source_socket.node.outputs.index(source_socket)
+        for source_node in source_nodes:
+            if len(source_node.outputs) <= source_index:
+                continue
+
+            node = node_class()
+            self._prepare_new_node(node)
+            self._position_edge_drop_node(node, scene_pos, source_type, reference_node=source_node)
+            self.scene.add_node(node)
+
+            if source_type == 'output' and node.inputs:
+                self._create_edge(source_node.outputs[source_index], node.inputs[0])
+            elif source_type == 'input' and node.outputs:
+                self._create_edge(node.outputs[0], source_socket)
+        return True
+    
+    def _on_edge_drop_create(self, node_type, scene_pos, source_socket, source_type):
+        """拖线到空白处松开后，创建新节点并自动与来源 socket 连线"""
+        node_class = NODE_REGISTRY.get(node_type)
+        if not node_class:
+            return
+
+        batch_sources = self._get_batch_edge_drop_sources(node_type, source_socket, source_type)
+        if batch_sources:
+            self._save_undo_state()
+            if self._create_batch_edge_drop_nodes(node_type, scene_pos, source_socket, source_type, batch_sources):
+                self._auto_save()
+            return
+
+        self._save_undo_state()
+        node = node_class()
+        # 根据拖线方向偏移节点位置，使 socket 对准鼠标释放点
+        self._position_edge_drop_node(node, scene_pos, source_type)
+        self._prepare_new_node(node)
         self.scene.add_node(node)
 
         # 自动连线
@@ -1485,21 +1565,13 @@ class EditorWindow(QMainWindow):
             # 如果没有特殊处理，使用默认第一个输入口
             if in_socket is None:
                 in_socket = node.inputs[0]
-            
-            if not getattr(in_socket, 'multi_input', False):
-                for edge in in_socket.edges[:]:
-                    edge.remove()
-            new_edge = Edge(source_socket, in_socket)
-            self.scene.add_edge(new_edge)
+
+            self._create_edge(source_socket, in_socket)
         elif source_type == 'input' and node.outputs:
             # 来源是输入口 → 连到新节点的第一个输出口
             out_socket = node.outputs[0]
             in_socket = source_socket
-            if not getattr(in_socket, 'multi_input', False):
-                for edge in in_socket.edges[:]:
-                    edge.remove()
-            new_edge = Edge(out_socket, in_socket)
-            self.scene.add_edge(new_edge)
+            self._create_edge(out_socket, in_socket)
 
         self._auto_save()
 
@@ -1794,6 +1866,8 @@ class EditorWindow(QMainWindow):
             node.prompt_edit.textChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'model_combo'):
             node.model_combo.currentIndexChanged.connect(self._schedule_auto_save)
+        if hasattr(node, 'style_combo'):
+            node.style_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'mode_combo'):
             node.mode_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'resolution_combo'):

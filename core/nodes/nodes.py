@@ -1393,6 +1393,11 @@ class GeminiAPINode(NodeItem):
     支持动态文本输入口，接收文本节点的输出。
     """
     node_type = "gemini_api"
+    STYLE_OPTIONS = ["无", "简易草图转分镜", "图片转分镜"]
+    STYLE_PROMPTS = {
+        "简易草图转分镜": "将分镜草图完善为手绘风格分镜,黑白风格,线条清晰",
+        "图片转分镜": "去除画面中的色彩，将图片转化成手绘风格的分镜图片,黑白风格,线条清晰",
+    }
     
     def __init__(self):
         self.generated_image_path = ""  # 生成的图片路径，供下游节点读取
@@ -1401,6 +1406,7 @@ class GeminiAPINode(NodeItem):
         self._show_text_input = False  # 是否显示文本输入口
         self._text_input_socket = None  # 文本输入socket引用
         self._thumbnails_expanded = True
+        self._syncing_selected_controls = False
         
         super().__init__("香蕉生图")
         self.add_multi_input("参考图片")  # 橙色多连接输入
@@ -1458,6 +1464,17 @@ class GeminiAPINode(NodeItem):
         self.model_combo.setStyleSheet(_combo_style)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         layout.addWidget(self.model_combo)
+
+        # ---- 风格选择 ----
+        style_label = QLabel("风格:")
+        style_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(style_label)
+
+        self.style_combo = QComboBox()
+        self.style_combo.addItems(self.STYLE_OPTIONS)
+        self.style_combo.setStyleSheet(_combo_style)
+        self.style_combo.currentTextChanged.connect(self._on_style_changed)
+        layout.addWidget(self.style_combo)
         
         # ---- 参考图片缩略图条（可拖拽排序） ----
         self.thumb_label = QLabel("参考图片:")
@@ -1671,6 +1688,40 @@ class GeminiAPINode(NodeItem):
         is_pro = "pro" in model_name.lower() or "3.1-flash" in model_name.lower()
         self._set_resolution_visible(is_pro)
         self._update_size()
+        if not self._syncing_selected_controls:
+            self._sync_selected_combo("model_combo", model_name)
+
+    def _on_style_changed(self, style_name):
+        if not self._syncing_selected_controls:
+            self._sync_selected_combo("style_combo", style_name)
+
+    def _sync_selected_combo(self, combo_attr, value):
+        scene = self.scene()
+        if not scene:
+            return
+
+        selected_nodes = [
+            item for item in scene.selectedItems()
+            if getattr(item, 'node_type', '') == self.node_type
+        ]
+        if len(selected_nodes) <= 1 or self not in selected_nodes:
+            return
+
+        for node in selected_nodes:
+            if node is self or not hasattr(node, combo_attr):
+                continue
+
+            combo = getattr(node, combo_attr)
+            if combo.currentText() == value:
+                continue
+
+            node._syncing_selected_controls = True
+            combo.blockSignals(True)
+            combo.setCurrentText(value)
+            combo.blockSignals(False)
+            if combo_attr == "model_combo":
+                node._on_model_changed(value)
+            node._syncing_selected_controls = False
     
     def _set_resolution_visible(self, visible):
         """设置分辨率选择器的可见性"""
@@ -1760,6 +1811,7 @@ class GeminiAPINode(NodeItem):
         params = {
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
+            "style": self.style_combo.currentText(),
             "aspect_ratio": self.aspect_ratio_combo.currentText(),
         }
         # Pro 模型和 3.1 flash 模型传递分辨率（API 需要 "1K"/"2K"/"4K" 大写字符串）
@@ -1767,6 +1819,16 @@ class GeminiAPINode(NodeItem):
         if "pro" in model_lower or "3.1-flash" in model_lower:
             params["image_size"] = self.resolution_combo.currentText()  # "1K"/"2K"/"4K"
         return params
+
+    def build_styled_prompt(self, prompt):
+        prompt = (prompt or "").strip()
+        style = self.style_combo.currentText() if hasattr(self, 'style_combo') else "无"
+        style_prefix = self.STYLE_PROMPTS.get(style, "")
+        if not style_prefix:
+            return prompt
+        if not prompt:
+            return style_prefix
+        return f"{style_prefix}\n{prompt}"
     
     def set_generated_image(self, image_path):
         """记录生成的图片路径（供下游节点读取，不在节点上显示预览）"""
@@ -1776,6 +1838,7 @@ class GeminiAPINode(NodeItem):
         return {
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
+            "style": self.style_combo.currentText(),
             "aspect_ratio": self.aspect_ratio_combo.currentText(),
             "resolution": self.resolution_combo.currentText(),
             "generated_image_path": self.generated_image_path,
@@ -1789,6 +1852,10 @@ class GeminiAPINode(NodeItem):
         model_index = self.model_combo.findText(data.get("model", ""))
         if model_index >= 0:
             self.model_combo.setCurrentIndex(model_index)
+
+        style_index = self.style_combo.findText(data.get("style", "无"))
+        if style_index >= 0:
+            self.style_combo.setCurrentIndex(style_index)
         
         ar_index = self.aspect_ratio_combo.findText(data.get("aspect_ratio", "1:1"))
         if ar_index >= 0:

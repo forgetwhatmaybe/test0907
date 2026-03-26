@@ -93,7 +93,7 @@ class Socket(QGraphicsEllipseItem):
         self.setPen(QPen(QColor("white"), 2))
         self.setZValue(1000)
         self.setAcceptHoverEvents(True)
-        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, False)
     
     def add_edge(self, edge):
         if edge not in self.edges:
@@ -128,6 +128,8 @@ class Socket(QGraphicsEllipseItem):
             view = scene.views()[0] if scene and scene.views() else None
             if view and hasattr(view, 'start_edge_drag'):
                 view.start_edge_drag(self)
+                event.accept()
+                return
         
         super().mousePressEvent(event)
 
