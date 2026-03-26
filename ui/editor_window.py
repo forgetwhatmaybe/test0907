@@ -86,12 +86,15 @@ class ExecuteThread(QThread):
     node_status_changed = pyqtSignal(str, str)  # (node_id, status: 'executing'/'success'/'error')
     text_display_updated = pyqtSignal(str, str, int)  # (node_id, text, tokens)
     
-    def __init__(self, scene, config, project_manager, output_node=None, output_nodes=None, direct_node=None):
+    def __init__(self, scene, config, project_manager, output_node=None, output_nodes=None, direct_node=None,
+                 batch_index=1, batch_total=1):
         super().__init__()
         self.scene = scene
         self.config = config
         self.project_manager = project_manager
         self.direct_node = direct_node
+        self.batch_index = batch_index
+        self.batch_total = batch_total
         # output_nodes 优先，如果传入列表则使用列表；否则封装单个节点
         if output_nodes is not None:
             self.target_output_nodes = output_nodes
@@ -138,7 +141,7 @@ class ExecuteThread(QThread):
     def _get_target_output_nodes(self, api_node):
         """获取需要保存结果的输出节点列表。
         如果是 direct_node 模式，只返回发起执行的目标输出节点。
-        否则返回所有连接的输出节点。
+        否则优先返回当前线程对应的目标输出节点；只有链式中间节点没有命中时才回退到全部。
         """
         all_output_nodes = self._find_output_nodes(api_node)
         
@@ -151,8 +154,25 @@ class ExecuteThread(QThread):
                     return filtered
             return all_output_nodes
         
-        # 否则返回所有输出节点
+        if not self.target_output_nodes:
+            return all_output_nodes
+
+        target_ids = {n.id for n in self.target_output_nodes}
+        filtered = [n for n in all_output_nodes if n.id in target_ids]
+        if filtered:
+            return filtered
+
         return all_output_nodes
+
+    def _get_output_base_name(self, output_node):
+        output_name = output_node.get_output_name()
+        batch_count = output_node.get_batch_count() if hasattr(output_node, 'get_batch_count') else 1
+        if batch_count > 1:
+            return f"{output_name}_{self.batch_index}"
+        return output_name
+
+    def _get_output_save_path(self, output_node, suffix):
+        return self.project_manager.current_project_path / f"{self._get_output_base_name(output_node)}{suffix}"
     
     def run(self):
         try:
@@ -402,8 +422,7 @@ class ExecuteThread(QThread):
                 if video_url:
                     output_nodes = self._get_target_output_nodes(node)
                     for output_node in output_nodes:
-                        output_name = output_node.get_output_name()
-                        save_path = self.project_manager.get_output_path(output_name)
+                        save_path = self._get_output_save_path(output_node, ".mp4")
                         
                         download_file(video_url, str(save_path))
                         
@@ -482,8 +501,7 @@ class ExecuteThread(QThread):
                 if video_url:
                     output_nodes = self._get_target_output_nodes(node)
                     for output_node in output_nodes:
-                        output_name = output_node.get_output_name()
-                        save_path = self.project_manager.get_output_path(output_name)
+                        save_path = self._get_output_save_path(output_node, ".mp4")
                         
                         download_file(video_url, str(save_path))
                         
@@ -568,8 +586,7 @@ class ExecuteThread(QThread):
                     
                     output_nodes = self._get_target_output_nodes(node)
                     for output_node in output_nodes:
-                        output_name = output_node.get_output_name()
-                        output_path = str(self.project_manager.current_project_path / f"{output_name}.png")
+                        output_path = str(self._get_output_save_path(output_node, ".png"))
                         import shutil as _shutil
                         _shutil.copy2(result_path, output_path)
                         output_node.video_path = output_path
@@ -654,8 +671,7 @@ class ExecuteThread(QThread):
                 if video_url:
                     output_nodes = self._get_target_output_nodes(node)
                     for output_node in output_nodes:
-                        output_name = output_node.get_output_name()
-                        save_path = self.project_manager.get_output_path(output_name)
+                        save_path = self._get_output_save_path(output_node, ".mp4")
                         
                         import requests
                         resp = requests.get(video_url, timeout=120)
@@ -801,8 +817,7 @@ class ExecuteThread(QThread):
                 if video_url:
                     output_nodes = self._get_target_output_nodes(node)
                     for output_node in output_nodes:
-                        output_name = output_node.get_output_name()
-                        save_path = self.project_manager.get_output_path(output_name)
+                        save_path = self._get_output_save_path(output_node, ".mp4")
 
                         import requests
                         resp = requests.get(video_url, timeout=120)
@@ -968,8 +983,7 @@ class ExecuteThread(QThread):
         # 如果直接连接到 OutputNode，复制到输出位置
         output_nodes = self._get_target_output_nodes(node)
         for output_node in output_nodes:
-            output_name = output_node.get_output_name()
-            output_path = str(self.project_manager.current_project_path / f"{output_name}.png")
+            output_path = str(self._get_output_save_path(output_node, ".png"))
             import shutil as _shutil
             _shutil.copy2(save_path, output_path)
             # 直接设置 video_path，供链式执行下游节点读取
@@ -1410,7 +1424,7 @@ class EditorWindow(QMainWindow):
                     node.set_project_path(str(self.project_path))
                 node.load_image_file(file_path)
                 self.scene.add_node(node)
-                current_y += max(node.height + 40, 240)
+                current_y += max(node.height + 80, 480)
             self._auto_save()
 
     def _on_video_file_drop(self, file_paths, pos):
@@ -1639,17 +1653,11 @@ class EditorWindow(QMainWindow):
             return
         
         # 创建并提交任务，只执行该直接连接的API节点
-        task_id = node.id
-        existing = self.task_queue.tasks.get(task_id)
-        if existing:
-            from ui.task_queue import TaskState
-            if existing["state"] == TaskState.RUNNING:
-                node_name = node.get_output_name() if hasattr(node, 'get_output_name') else (node.title if hasattr(node, 'title') else '节点')
-                self.statusBar().showMessage(f"⏳ {node_name} 正在执行中")
-                return
-            # 如果任务已经完成或失败,先清除它
-            if existing["state"] in (TaskState.SUCCESS, TaskState.FAILED, TaskState.CANCELLED):
-                self.task_queue.remove_finished()
+        if self._has_running_output_tasks(node):
+            node_name = node.get_output_name() if hasattr(node, 'get_output_name') else (node.title if hasattr(node, 'title') else '节点')
+            self.statusBar().showMessage(f"⏳ {node_name} 正在执行中")
+            return
+        self.task_queue.remove_finished()
         
         # 获取输出名称
         if hasattr(node, 'get_output_name'):
@@ -1667,16 +1675,22 @@ class EditorWindow(QMainWindow):
             except:
                 pass
         
-        thread = ExecuteThread(
-            self.scene, self.config, self.project_manager,
-            output_node=node,
-            direct_node=direct_api_node
-        )
-        thread.video_generated.connect(self._on_video_generated)
-        thread.node_status_changed.connect(self._on_node_status_changed)
-        thread.text_display_updated.connect(self._on_text_display_updated)
-        
-        self.task_queue.add_task(task_id, output_name, type_label, thread)
+        batch_count = self._get_output_batch_count(node)
+        self._prepare_output_node_run(node)
+        for batch_index in range(1, batch_count + 1):
+            task_id = self._build_output_task_id(node, batch_index)
+            task_output_name = self._build_output_task_name(output_name, node, batch_index)
+            thread = ExecuteThread(
+                self.scene, self.config, self.project_manager,
+                output_node=node,
+                direct_node=direct_api_node,
+                batch_index=batch_index,
+                batch_total=batch_count
+            )
+            thread.video_generated.connect(self._on_video_generated)
+            thread.node_status_changed.connect(self._on_node_status_changed)
+            thread.text_display_updated.connect(self._on_text_display_updated)
+            self.task_queue.add_task(task_id, task_output_name, type_label, thread)
         self.stop_action.setEnabled(True)
         active = self.task_queue.active_count()
         self.statusBar().showMessage(f"🔄 {active} 个任务正在执行")
@@ -1880,6 +1894,8 @@ class EditorWindow(QMainWindow):
             node.cfg_slider.valueChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'name_edit'):
             node.name_edit.editingFinished.connect(self._schedule_auto_save)
+        if hasattr(node, 'batch_spin'):
+            node.batch_spin.valueChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'seed_spin'):
             node.seed_spin.valueChanged.connect(self._schedule_auto_save)
         # ImageEditNode 专有控件
@@ -2043,25 +2059,28 @@ class EditorWindow(QMainWindow):
             targets = [n for n in self.scene.nodes.values() if n.node_type == 'output']
         
         for out_node in targets:
-            task_id = out_node.id
-            # 如果同一输出节点已在运行中，跳过
-            existing = self.task_queue.tasks.get(task_id)
-            if existing and existing["state"].name == "RUNNING":
+            if self._has_running_output_tasks(out_node):
                 self.statusBar().showMessage(f"⏳ {out_node.get_output_name()} 正在执行中")
                 continue
             
             output_name = out_node.get_output_name()
             type_label = self._detect_task_type(out_node)
-            
-            thread = ExecuteThread(
-                self.scene, self.config, self.project_manager,
-                output_node=out_node
-            )
-            thread.video_generated.connect(self._on_video_generated)
-            thread.node_status_changed.connect(self._on_node_status_changed)
-            thread.text_display_updated.connect(self._on_text_display_updated)
-            
-            self.task_queue.add_task(task_id, output_name, type_label, thread)
+
+            batch_count = self._get_output_batch_count(out_node)
+            self._prepare_output_node_run(out_node)
+            for batch_index in range(1, batch_count + 1):
+                task_id = self._build_output_task_id(out_node, batch_index)
+                task_output_name = self._build_output_task_name(output_name, out_node, batch_index)
+                thread = ExecuteThread(
+                    self.scene, self.config, self.project_manager,
+                    output_node=out_node,
+                    batch_index=batch_index,
+                    batch_total=batch_count
+                )
+                thread.video_generated.connect(self._on_video_generated)
+                thread.node_status_changed.connect(self._on_node_status_changed)
+                thread.text_display_updated.connect(self._on_text_display_updated)
+                self.task_queue.add_task(task_id, task_output_name, type_label, thread)
         
         self.stop_action.setEnabled(True)
         active = self.task_queue.active_count()
@@ -2089,6 +2108,36 @@ class EditorWindow(QMainWindow):
                     elif src.node_type == "text_vision":
                         return "文本识图"
         return "工作流"
+
+    def _get_output_batch_count(self, output_node):
+        if hasattr(output_node, 'get_batch_count'):
+            return max(1, output_node.get_batch_count())
+        return 1
+
+    def _build_output_task_id(self, output_node, batch_index):
+        batch_count = self._get_output_batch_count(output_node)
+        if batch_count <= 1:
+            return output_node.id
+        return f"{output_node.id}:{batch_index}"
+
+    def _build_output_task_name(self, output_name, output_node, batch_index):
+        batch_count = self._get_output_batch_count(output_node)
+        if batch_count <= 1:
+            return output_name
+        return f"{output_name} [{batch_index}/{batch_count}]"
+
+    def _has_running_output_tasks(self, output_node):
+        prefix = f"{output_node.id}:"
+        for task_id, task in self.task_queue.tasks.items():
+            if task["state"].name != "RUNNING":
+                continue
+            if task_id == output_node.id or task_id.startswith(prefix):
+                return True
+        return False
+
+    def _prepare_output_node_run(self, output_node):
+        if hasattr(output_node, 'clear_results'):
+            output_node.clear_results(update_size=True)
     
     def _on_active_count_changed(self, count):
         """队列中运行任务数变化"""
@@ -2105,7 +2154,7 @@ class EditorWindow(QMainWindow):
 
     def _on_task_stopped(self, task_id):
         """任务被用户停止，更新输出节点状态为 cancelled"""
-        node = self.scene.get_node_by_id(task_id)
+        node = self.scene.get_node_by_id(task_id.split(":", 1)[0])
         if node and hasattr(node, 'set_execution_status'):
             node.set_execution_status('cancelled')
 
@@ -2135,18 +2184,29 @@ class EditorWindow(QMainWindow):
         node = self.scene.get_node_by_id(node_id)
         if not node or not hasattr(node, 'set_video_thumbnail'):
             return
+        select_new = len(getattr(node, 'result_paths', [])) == 0
         if video_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp')):
             # 图片输出：生成小 JPEG 缩略图，避免加载全尺寸大图很卡
             thumb_path = str(Path(video_path).with_suffix('')) + "_thumb.jpg"
             ok = _make_image_thumbnail(video_path, thumb_path)
             if ok and Path(thumb_path).exists():
-                node.set_video_thumbnail(thumb_path, video_path)
+                if hasattr(node, 'add_output_result'):
+                    node.add_output_result(video_path, thumb_path, select=select_new)
+                else:
+                    node.set_video_thumbnail(thumb_path, video_path)
             else:
                 # 回退：直接加载原图
-                node.set_video_thumbnail(video_path, video_path)
+                if hasattr(node, 'add_output_result'):
+                    node.add_output_result(video_path, video_path, select=select_new)
+                else:
+                    node.set_video_thumbnail(video_path, video_path)
         else:
             thumb_path = video_path.replace(".mp4", "_thumb.jpg")
-            node.set_video_thumbnail(thumb_path, video_path)
+            if hasattr(node, 'add_output_result'):
+                node.add_output_result(video_path, thumb_path, select=select_new)
+            else:
+                node.set_video_thumbnail(thumb_path, video_path)
+        self._schedule_auto_save()
     
     def _open_settings(self):
         dialog = APISettingsDialog(self)

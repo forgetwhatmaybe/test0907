@@ -1,7 +1,8 @@
 from PyQt5.QtWidgets import (
     QLabel, QVBoxLayout, QPushButton, QFileDialog, QLineEdit, 
     QTextEdit, QSpinBox, QComboBox, QWidget, QHBoxLayout, QMenu, QAction,
-    QGraphicsProxyWidget, QSlider, QGridLayout, QSizePolicy, QDialog
+    QGraphicsProxyWidget, QSlider, QGridLayout, QSizePolicy, QDialog,
+    QScrollArea, QToolButton
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
 from PyQt5.QtGui import QPixmap, QCursor, QStandardItem, QStandardItemModel, QColor, QIcon, QImage, QBrush
@@ -2657,37 +2658,38 @@ class VideoNode(NodeItem):
 class OutputNode(NodeItem):
     node_type = "output"
     _counter = 0
-    
+
     def __init__(self):
-        self.video_path = ""          # 视频或图片的文件路径
+        self.video_path = ""
         self.thumbnail_path = ""
+        self.result_paths = []
+        self.selected_result_index = 0
+        self.batch_count = 1
+        self._syncing_selected_controls = False
         self.project_path = None
-        self._status_color = None  # None=默认, 执行时变色
+        self._status_color = None
         self._status_timer = None
-        self._is_image_output = False  # 当前输出是否为图片
+        self._is_image_output = False
+        self._result_buttons = []
         super().__init__("视频(图片)输出")
         self.output_name = "output"
         self.on_execute_requested = None
         self.on_execute_current_requested = None
-        
+
         self.add_input("视频")
-        self.add_output("输出")   # 新增输出端口，用于链式执行
+        self.add_output("输出")
         self._update_size()
-    
+
     def set_execution_status(self, status):
-        """设置执行状态，改变节点标题栏颜色
-        status: 'executing'=蓝色, 'success'=绿色, 'error'=红色, 'cancelled'=灰色, None=恢复默认
-        """
         color_map = {
-            "executing": ("#1565C0", "#1976D2"),  # 蓝色
-            "success": ("#2E7D32", "#388E3C"),     # 绿色
-            "error": ("#C62828", "#D32F2F"),        # 红色
-            "cancelled": ("#616161", "#757575"),    # 灰色
+            "executing": ("#1565C0", "#1976D2"),
+            "success": ("#2E7D32", "#388E3C"),
+            "error": ("#C62828", "#D32F2F"),
+            "cancelled": ("#616161", "#757575"),
         }
         self._status_color = color_map.get(status)
         self.update()
 
-        # 成功和失败状态自动恢复
         if self._status_timer:
             self._status_timer.stop()
             self._status_timer = None
@@ -2696,47 +2698,43 @@ class OutputNode(NodeItem):
             self._status_timer = QTimer()
             self._status_timer.setSingleShot(True)
             self._status_timer.timeout.connect(self._reset_status_color)
-            self._status_timer.start(5000)  # 5秒后恢复
+            self._status_timer.start(5000)
         elif status in ("error", "cancelled"):
             self._status_timer = QTimer()
             self._status_timer.setSingleShot(True)
             self._status_timer.timeout.connect(self._reset_status_color)
-            self._status_timer.start(8000)  # 8秒后恢复
-    
+            self._status_timer.start(8000)
+
     def _reset_status_color(self):
-        """恢复默认标题栏颜色"""
         self._status_color = None
         self._status_timer = None
         self.update()
-    
+
     def paint(self, painter, option, widget):
-        """重写绘制方法，支持状态变色"""
         from PyQt5.QtGui import QPainterPath, QLinearGradient, QBrush, QPen
-        
+
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        
+
         gradient = QLinearGradient(0, 0, 0, self.height)
         gradient.setColorAt(0, QColor("#3d3d3d"))
         gradient.setColorAt(1, QColor("#2d2d2d"))
-        
+
         painter.setBrush(QBrush(gradient))
-        
+
         if self._status_color:
-            # 执行状态：用状态色描边
             painter.setPen(QPen(QColor(self._status_color[1]), 3))
         elif self.isSelected():
             painter.setPen(QPen(QColor("#00aaff"), 3))
         else:
             painter.setPen(QPen(QColor("#555555"), 1))
-        
+
         painter.drawPath(path)
-        
-        # 标题栏
+
         header_path = QPainterPath()
         header_path.addRoundedRect(0, 0, self.width, 30, 10, 10)
         header_path.addRect(0, 15, self.width, 15)
-        
+
         header_gradient = QLinearGradient(0, 0, 0, 30)
         if self._status_color:
             header_gradient.setColorAt(0, QColor(self._status_color[0]))
@@ -2744,30 +2742,30 @@ class OutputNode(NodeItem):
         else:
             header_gradient.setColorAt(0, QColor("#5c5c5c"))
             header_gradient.setColorAt(1, QColor("#4a4a4a"))
-        
+
         painter.setBrush(QBrush(header_gradient))
         painter.setPen(Qt.NoPen)
         painter.drawPath(header_path)
-    
+
     def set_unique_name(self, existing_names=None):
         if existing_names is None:
             existing_names = set()
-        
+
         counter = OutputNode._counter + 1
         while f"output_{counter}" in existing_names:
             counter += 1
-        
+
         self.name_edit.setText(f"output_{counter}")
         OutputNode._counter = counter
-    
+
     def _setup_content(self):
         layout = QVBoxLayout(self._content_widget)
         layout.setContentsMargins(5, 5, 5, 5)
-        
+
         name_label = QLabel("输出名称:")
         name_label.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(name_label)
-        
+
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("视频文件名")
         self.name_edit.setText("output")
@@ -2782,12 +2780,33 @@ class OutputNode(NodeItem):
         """)
         self.name_edit.editingFinished.connect(self._on_name_changed)
         layout.addWidget(self.name_edit)
-        
+
         hint_label = QLabel("将保存为: {名称}.mp4 或 .png")
         hint_label.setStyleSheet("color: #666; font-size: 10px;")
         layout.addWidget(hint_label)
-        
-        # 视频预览区域
+
+        batch_layout = QHBoxLayout()
+        batch_label = QLabel("批次:")
+        batch_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        batch_layout.addWidget(batch_label)
+
+        self.batch_spin = QSpinBox()
+        self.batch_spin.setRange(1, 8)
+        self.batch_spin.setValue(1)
+        self.batch_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+                border-radius: 3px;
+                padding: 4px;
+            }
+        """)
+        self.batch_spin.valueChanged.connect(self._on_batch_changed)
+        batch_layout.addWidget(self.batch_spin)
+        batch_layout.addStretch()
+        layout.addLayout(batch_layout)
+
         self.video_container = QWidget()
         self.video_container.setFixedSize(180, 100)
         self.video_container.setStyleSheet("""
@@ -2797,14 +2816,12 @@ class OutputNode(NodeItem):
                 border-radius: 5px;
             }
         """)
-        
-        # 视频帧显示标签 (底层)
+
         self.frame_label = QLabel(self.video_container)
         self.frame_label.setGeometry(2, 2, 176, 96)
         self.frame_label.setAlignment(Qt.AlignCenter)
         self.frame_label.setStyleSheet("background: black;")
-        
-        # 点击覆盖按钮 (顶层，始终接收点击)
+
         self.thumbnail_btn = DoubleClickButton(self.video_container)
         self.thumbnail_btn.setGeometry(2, 2, 176, 96)
         self.thumbnail_btn.setStyleSheet("""
@@ -2816,130 +2833,330 @@ class OutputNode(NodeItem):
         self.thumbnail_btn.clicked.connect(self._toggle_video_playback)
         self.thumbnail_btn.doubleClicked.connect(self._open_with_system_player)
         self.thumbnail_btn.raise_()
-        
-        # OpenCV 播放器状态
+
         self._cv_cap = None
         self._is_playing = False
         self._play_timer = QTimer()
         self._play_timer.timeout.connect(self._render_next_frame)
-        
+
         self.video_container.hide()
         layout.addWidget(self.video_container)
-    
+
+        self.result_scroll = QScrollArea()
+        self.result_scroll.setWidgetResizable(True)
+        self.result_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.result_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.result_scroll.setFixedHeight(108)
+        self.result_scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: transparent;
+                border: none;
+            }
+            QScrollBar:horizontal {
+                background: #1f1f1f;
+                height: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #555;
+                border-radius: 4px;
+                min-width: 24px;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+        """)
+        self.result_list_widget = QWidget()
+        self.result_list_layout = QHBoxLayout(self.result_list_widget)
+        self.result_list_layout.setContentsMargins(0, 4, 0, 0)
+        self.result_list_layout.setSpacing(8)
+        self.result_scroll.setWidget(self.result_list_widget)
+        self.result_scroll.hide()
+        layout.addWidget(self.result_scroll)
+
     def get_output_name(self):
         return self.name_edit.text() or "output"
-    
+
+    def get_batch_count(self):
+        return self.batch_spin.value() if hasattr(self, 'batch_spin') else self.batch_count
+
+    def _on_batch_changed(self, value):
+        self.batch_count = value
+        if not self._syncing_selected_controls:
+            self._sync_selected_batch(value)
+        self._rebuild_result_list()
+        self._update_size()
+
+    def _sync_selected_batch(self, value):
+        scene = self.scene()
+        if not scene:
+            return
+
+        selected_nodes = [
+            item for item in scene.selectedItems()
+            if getattr(item, 'node_type', '') == self.node_type
+        ]
+        if len(selected_nodes) <= 1 or self not in selected_nodes:
+            return
+
+        for node in selected_nodes:
+            if node is self or not hasattr(node, 'batch_spin'):
+                continue
+            if node.batch_spin.value() == value:
+                continue
+
+            node._syncing_selected_controls = True
+            node.batch_spin.blockSignals(True)
+            node.batch_spin.setValue(value)
+            node.batch_spin.blockSignals(False)
+            node.batch_count = value
+            node._rebuild_result_list()
+            node._update_size()
+            node._syncing_selected_controls = False
+
     def set_project_path(self, path):
-        """设置项目路径，并自动检测已有视频"""
         self.project_path = Path(path)
+        if self.result_paths:
+            self._rebuild_result_list()
+            self._show_selected_result()
+            return
         self._auto_detect_video()
-    
+
     def _on_name_changed(self):
-        """输出名称修改后自动检测对应视频"""
         self._auto_detect_video()
-    
+
+    def clear_results(self, update_size=True):
+        self.result_paths = []
+        self.selected_result_index = 0
+        self.video_path = ""
+        self.thumbnail_path = ""
+        self._is_image_output = False
+        self._stop_video_playback()
+        self.thumbnail_btn.setIcon(QIcon())
+        self.thumbnail_btn.setText("")
+        self.thumbnail_btn.set_file_path("")
+        self.frame_label.clear()
+        self.video_container.hide()
+        self._rebuild_result_list()
+        if update_size:
+            self._update_size()
+
     def _auto_detect_video(self):
-        """根据输出名称自动检测项目文件夹中已有的视频/图片和缩略图"""
         if not self.project_path or not self.project_path.exists():
             return
-        
+
+        self.clear_results(update_size=False)
         output_name = self.get_output_name()
-        video_file = self.project_path / f"{output_name}.mp4"
-        image_file = self.project_path / f"{output_name}.png"
-        thumb_file = self.project_path / f"{output_name}_thumb.jpg"
-        
-        # 优先检测图片（来自 Gemini / 图片修改）
-        if image_file.exists():
-            self._is_image_output = True
-            # 优先使用预生成的小缩略图，避免每次加载大 PNG 很卡
-            thumb_from_png = self.project_path / f"{output_name}_thumb.jpg"
-            if not thumb_from_png.exists():
-                # 生成缩略图（最大 320px 宽，JPEG 85）
-                try:
-                    import cv2
-                    import numpy as np
-                    # 使用 np.fromfile 读取文件，支持中文路径
-                    img_array = np.fromfile(str(image_file), dtype=np.uint8)
-                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                    if img is not None:
-                        h, w = img.shape[:2]
-                        if w > 320:
-                            scale = 320 / w
-                            img = cv2.resize(img, (320, int(h * scale)), interpolation=cv2.INTER_AREA)
-                        # 使用 imencode + tofile 保存，支持中文路径
-                        ext = '.jpg'
-                        cv2.imencode(ext, img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tofile(str(thumb_from_png))
-                except Exception:
-                    pass
-            if thumb_from_png.exists():
-                self.set_video_thumbnail(str(thumb_from_png), str(image_file))
-            else:
-                self.set_video_thumbnail(str(image_file), str(image_file))
-            return
-        
-        if video_file.exists():
-            self._is_image_output = False
-            # 如果没有缩略图，尝试从视频中提取
-            if not thumb_file.exists():
-                try:
-                    import cv2
-                    cap = cv2.VideoCapture(str(video_file))
-                    ret, frame = cap.read()
-                    if ret:
-                        # 使用 imencode + tofile 保存，支持中文路径
-                        cv2.imencode('.jpg', frame)[1].tofile(str(thumb_file))
-                    cap.release()
-                except Exception:
-                    pass
-            
-            if thumb_file.exists():
-                self.set_video_thumbnail(str(thumb_file), str(video_file))
-            else:
-                # 没有缩略图但有视频，直接设置视频路径并显示占位
-                self.video_path = str(video_file)
-                self.thumbnail_path = ""
-                self.thumbnail_btn.setText("▶ 点击播放")
-                self.thumbnail_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #1a1a2e;
-                        color: #4CAF50;
-                        border: none;
-                        font-size: 14px;
-                    }
-                """)
-                self.video_container.setStyleSheet("""
-                    QWidget {
-                        background-color: #2a2a2a;
-                        border: 2px solid #2196F3;
-                        border-radius: 5px;
-                    }
-                """)
-                self.video_container.setCursor(Qt.PointingHandCursor)
-                self.video_container.show()
+
+        if self.get_batch_count() > 1:
+            detected = []
+            for index in range(1, self.get_batch_count() + 1):
+                image_file = self.project_path / f"{output_name}_{index}.png"
+                video_file = self.project_path / f"{output_name}_{index}.mp4"
+                if image_file.exists():
+                    detected.append(str(image_file))
+                elif video_file.exists():
+                    detected.append(str(video_file))
+            if detected:
+                for result_path in detected:
+                    self.add_output_result(result_path, select=False)
+                self.selected_result_index = 0
+                self._show_selected_result()
                 self._update_size()
-    
+                return
+
+        image_file = self.project_path / f"{output_name}.png"
+        video_file = self.project_path / f"{output_name}.mp4"
+        if image_file.exists():
+            self.add_output_result(str(image_file), select=True)
+            return
+        if video_file.exists():
+            self.add_output_result(str(video_file), select=True)
+
+    def add_output_result(self, video_path, thumb_path=None, select=True):
+        if not video_path:
+            return
+
+        if video_path not in self.result_paths:
+            self.result_paths.append(video_path)
+            self.result_paths.sort(key=self._result_sort_key)
+
+        path_index = self.result_paths.index(video_path)
+        if select or self.selected_result_index >= len(self.result_paths):
+            self.selected_result_index = path_index
+
+        self._rebuild_result_list()
+        if select or len(self.result_paths) == 1:
+            self._show_result(video_path, thumb_path)
+        self._update_size()
+
+    def _result_sort_key(self, video_path):
+        path = Path(video_path)
+        stem = path.stem
+        if "_" in stem:
+            prefix, suffix = stem.rsplit("_", 1)
+            if suffix.isdigit():
+                return (prefix, int(suffix))
+        return (stem, 0)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _result_button_style(self, selected):
+        border_color = "#2196F3" if selected else "#444"
+        bg_color = "#203040" if selected else "#2a2a2a"
+        return f"""
+            QToolButton {{
+                background-color: {bg_color};
+                color: white;
+                border: 2px solid {border_color};
+                border-radius: 8px;
+                padding: 6px;
+                font-size: 11px;
+            }}
+            QToolButton:hover {{
+                background-color: #355070;
+            }}
+        """
+
+    def _get_result_card_pixmap(self, result_path):
+        thumb_path = self._resolve_thumb_path(result_path)
+        if thumb_path and Path(thumb_path).exists():
+            pixmap = ThumbnailCache.get(thumb_path, 44, 44)
+            if pixmap and not pixmap.isNull():
+                return pixmap
+
+        suffix = Path(result_path).suffix.lower()
+        fallback = QPixmap(44, 44)
+        fallback.fill(QColor("#2d2d2d"))
+        return fallback
+
+    def _create_result_card(self, index, result_path):
+        btn = QToolButton()
+        btn.setText(f"#{index + 1}\n{Path(result_path).name}")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip(result_path)
+        btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        btn.setFixedSize(88, 92)
+        btn.setStyleSheet(self._result_button_style(index == self.selected_result_index))
+
+        pixmap = self._get_result_card_pixmap(result_path)
+        if pixmap and not pixmap.isNull():
+            btn.setIcon(QIcon(pixmap))
+            btn.setIconSize(pixmap.size())
+
+        btn.clicked.connect(lambda checked=False, idx=index: self._select_result(idx))
+        return btn
+
+    def _rebuild_result_list(self):
+        self._clear_layout(self.result_list_layout)
+        self._result_buttons = []
+
+        show_list = len(self.result_paths) > 1
+        self.result_scroll.setVisible(show_list)
+        if not show_list:
+            return
+
+        for index, result_path in enumerate(self.result_paths):
+            btn = self._create_result_card(index, result_path)
+            self.result_list_layout.addWidget(btn)
+            self._result_buttons.append(btn)
+        self.result_list_layout.addStretch()
+
+    def _select_result(self, index):
+        if index < 0 or index >= len(self.result_paths):
+            return
+        self.selected_result_index = index
+        self._show_selected_result()
+        self._rebuild_result_list()
+
+    def _show_selected_result(self):
+        if not self.result_paths:
+            return
+        self.selected_result_index = min(self.selected_result_index, len(self.result_paths) - 1)
+        self._show_result(self.result_paths[self.selected_result_index])
+
+    def _show_result(self, video_path, thumb_path=None):
+        self.video_path = video_path
+        resolved_thumb = thumb_path or self._resolve_thumb_path(video_path)
+        if resolved_thumb and Path(resolved_thumb).exists():
+            self.set_video_thumbnail(resolved_thumb, video_path)
+            return
+
+        self.thumbnail_path = ""
+        self._is_image_output = video_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp'))
+        self.thumbnail_btn.setIcon(QIcon())
+        self.thumbnail_btn.setText("🖼 点击打开" if self._is_image_output else "▶ 点击播放")
+        self.thumbnail_btn.set_file_path(self.video_path)
+        self.video_container.setStyleSheet("""
+            QWidget {
+                background-color: #2a2a2a;
+                border: 2px solid #2196F3;
+                border-radius: 5px;
+            }
+        """)
+        self.video_container.setCursor(Qt.PointingHandCursor)
+        self.video_container.show()
+
+    def _resolve_thumb_path(self, video_path):
+        if not video_path or not Path(video_path).exists():
+            return ""
+
+        path = Path(video_path)
+        thumb_path = str(path.with_suffix('')) + "_thumb.jpg"
+        if Path(thumb_path).exists():
+            return thumb_path
+
+        is_image = path.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+        try:
+            import cv2
+            if is_image:
+                import numpy as np
+                img_array = np.fromfile(str(path), dtype=np.uint8)
+                img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                if img is not None:
+                    h, w = img.shape[:2]
+                    if w > 320:
+                        scale = 320 / w
+                        img = cv2.resize(img, (320, int(h * scale)), interpolation=cv2.INTER_AREA)
+                    cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tofile(thumb_path)
+            else:
+                cap = cv2.VideoCapture(str(path))
+                ret, frame = cap.read()
+                if ret:
+                    cv2.imencode('.jpg', frame)[1].tofile(thumb_path)
+                cap.release()
+        except Exception:
+            return str(path) if is_image else ""
+        return thumb_path if Path(thumb_path).exists() else (str(path) if is_image else "")
+
+    def _stop_video_playback(self):
+        self._is_playing = False
+        self._play_timer.stop()
+        if self._cv_cap:
+            self._cv_cap.release()
+            self._cv_cap = None
+
     def set_video_thumbnail(self, thumb_path, video_path):
-        """设置视频/图片缩略图和文件路径"""
         self.thumbnail_path = thumb_path
         self.video_path = video_path
-        # 根据文件扩展名判断是图片还是视频
         self._is_image_output = video_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp'))
-        
+
         p = Path(thumb_path)
         if not p.exists():
             return
-        
-        # 安全门：超过 500KB 的文件不直接加载为缩略图，防止卡顿
-        # （正常缩略图经过压缩后应远小于 100KB）
+
         file_size = p.stat().st_size
         if file_size > 500 * 1024:
-            # 尝试用 cv2 现场生成小缩略图到临时路径
             thumb_small = str(p.with_name(p.stem + "_thumb.jpg"))
             if not Path(thumb_small).exists():
                 try:
                     import cv2
                     import numpy as np
-                    # 使用 np.fromfile 读取文件，支持中文路径
                     img_array = np.fromfile(str(p), dtype=np.uint8)
                     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                     if img is not None:
@@ -2947,45 +3164,35 @@ class OutputNode(NodeItem):
                         if w > 320:
                             scale = 320 / w
                             img = cv2.resize(img, (320, int(h * scale)), interpolation=cv2.INTER_AREA)
-                        # 使用 imencode + tofile 保存，支持中文路径
                         cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tofile(thumb_small)
                 except Exception:
                     pass
             if Path(thumb_small).exists():
                 self.thumbnail_path = thumb_small
                 thumb_path = thumb_small
-            # 如果仍然 > 500KB（cv2 不可用等情况），跳过显示
             if Path(thumb_path).stat().st_size > 500 * 1024:
                 return
-        
-        # 清除该缩略图的缓存，确保加载最新图片（在最终确定路径后）
+
         ThumbnailCache.invalidate(thumb_path)
-        
-        # 尝试多种方式加载缩略图，提高兼容性
+
         pixmap = None
-        
-        # 方法1: 使用 QImage 加载后转 QPixmap
         try:
-            from PyQt5.QtGui import QImage
             _img = QImage(thumb_path)
             if not _img.isNull():
                 pixmap = QPixmap.fromImage(_img)
         except Exception:
             pass
-        
-        # 方法2: 直接使用 QPixmap 加载
+
         if pixmap is None or pixmap.isNull():
             try:
                 pixmap = QPixmap(thumb_path)
             except Exception:
                 pass
-        
-        # 方法3: 使用 cv2 读取并转换为 QPixmap
+
         if pixmap is None or pixmap.isNull():
             try:
                 import cv2
                 import numpy as np
-                # 使用 np.fromfile 读取文件，支持中文路径
                 img_array = np.fromfile(str(thumb_path), dtype=np.uint8)
                 img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                 if img is not None:
@@ -2996,8 +3203,7 @@ class OutputNode(NodeItem):
                     pixmap = QPixmap.fromImage(q_img)
             except Exception:
                 pass
-        
-        # 方法4: 使用 PIL 读取并转换为 QPixmap
+
         if pixmap is None or pixmap.isNull():
             try:
                 from PIL import Image
@@ -3009,12 +3215,13 @@ class OutputNode(NodeItem):
                 pixmap = QPixmap.fromImage(q_img)
             except Exception:
                 pass
-        
+
         if pixmap and not pixmap.isNull():
             scaled = ThumbnailCache.get(self.thumbnail_path, 176, 96) or pixmap.scaled(176, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.thumbnail_btn.setIcon(QIcon(scaled))
             self.thumbnail_btn.setIconSize(scaled.size())
-            self.thumbnail_btn.set_file_path(self.video_path)  # 设置拖拽文件路径
+            self.thumbnail_btn.setText("")
+            self.thumbnail_btn.set_file_path(self.video_path)
             self.video_container.setStyleSheet("""
                 QWidget {
                     background-color: #2a2a2a;
@@ -3025,27 +3232,19 @@ class OutputNode(NodeItem):
             self.video_container.setCursor(Qt.PointingHandCursor)
             self.video_container.show()
             self._update_size()
-    
+
     def _toggle_video_playback(self):
-        """切换视频播放/暂停（使用OpenCV逐帧渲染），图片则直接用系统打开"""
         if not self.video_path or not Path(self.video_path).exists():
             return
-        
-        # 图片文件：单击也用系统默认工具打开
+
         if self._is_image_output:
             self._open_with_system_player()
             return
-        
+
         if self._is_playing:
-            # 暂停
-            self._is_playing = False
-            self._play_timer.stop()
-            if self._cv_cap:
-                self._cv_cap.release()
-                self._cv_cap = None
+            self._stop_video_playback()
             self._restore_thumbnail_icon()
         else:
-            # 开始播放
             try:
                 import cv2
                 self._cv_cap = cv2.VideoCapture(self.video_path)
@@ -3055,97 +3254,54 @@ class OutputNode(NodeItem):
                 if fps <= 0:
                     fps = 24
                 self._is_playing = True
-                # 清除按钮图标，让底层frame_label显示视频帧
                 self.thumbnail_btn.setIcon(QIcon())
                 self.thumbnail_btn.setText("")
                 self._play_timer.start(int(1000 / fps))
             except ImportError:
                 print("需要安装 opencv-python 才能播放视频")
-    
+
     def _render_next_frame(self):
-        """渲染下一帧视频到 frame_label"""
         if not self._cv_cap or not self._is_playing:
             self._play_timer.stop()
             return
-        
+
         import cv2
         ret, frame = self._cv_cap.read()
         if not ret:
-            # 播放结束
-            self._is_playing = False
-            self._play_timer.stop()
-            self._cv_cap.release()
-            self._cv_cap = None
+            self._stop_video_playback()
             self._restore_thumbnail_icon()
             return
-        
-        # BGR -> RGB
+
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = frame_rgb.shape
         bytes_per_line = ch * w
-        # 使用 copy() 确保数据被复制，避免 numpy 数组被垃圾回收
         q_img = QImage(frame_rgb.tobytes(), w, h, bytes_per_line, QImage.Format_RGB888).copy()
         pixmap = QPixmap.fromImage(q_img)
         scaled = pixmap.scaled(176, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.frame_label.setPixmap(scaled)
-    
+
     def _restore_thumbnail_icon(self):
-        """恢复缩略图显示到按钮上"""
         if self.thumbnail_path and Path(self.thumbnail_path).exists():
             pixmap = None
-            
-            # 方法1: 使用 QImage 加载
             try:
-                from PyQt5.QtGui import QImage
                 _img = QImage(self.thumbnail_path)
                 if not _img.isNull():
                     pixmap = QPixmap.fromImage(_img)
             except Exception:
                 pass
-            
-            # 方法2: 直接使用 QPixmap 加载
+
             if pixmap is None or pixmap.isNull():
                 try:
                     pixmap = QPixmap(self.thumbnail_path)
                 except Exception:
                     pass
-            
-            # 方法3: 使用 cv2 读取并转换
-            if pixmap is None or pixmap.isNull():
-                try:
-                    import cv2
-                    import numpy as np
-                    # 使用 np.fromfile 读取文件，支持中文路径
-                    img_array = np.fromfile(str(self.thumbnail_path), dtype=np.uint8)
-                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                    if img is not None:
-                        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                        h, w, ch = img_rgb.shape
-                        bytes_per_line = ch * w
-                        q_img = QImage(img_rgb.tobytes(), w, h, bytes_per_line, QImage.Format_RGB888).copy()
-                        pixmap = QPixmap.fromImage(q_img)
-                except Exception:
-                    pass
-            
-            # 方法4: 使用 PIL 读取并转换
-            if pixmap is None or pixmap.isNull():
-                try:
-                    from PIL import Image
-                    pil_img = Image.open(self.thumbnail_path)
-                    if pil_img.mode in ('RGBA', 'P'):
-                        pil_img = pil_img.convert('RGB')
-                    data = pil_img.tobytes('raw', 'RGB')
-                    q_img = QImage(data, pil_img.width, pil_img.height, pil_img.width * 3, QImage.Format_RGB888).copy()
-                    pixmap = QPixmap.fromImage(q_img)
-                except Exception:
-                    pass
-            
+
             if pixmap and not pixmap.isNull():
                 scaled = pixmap.scaled(176, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.thumbnail_btn.setIcon(QIcon(scaled))
                 self.thumbnail_btn.setIconSize(scaled.size())
         self.frame_label.clear()
-    
+
     def _create_context_menu(self):
         menu = QMenu()
         menu.setStyleSheet("""
@@ -3164,28 +3320,27 @@ class OutputNode(NodeItem):
                 background-color: #3d3d3d;
             }
         """)
-        
+
         execute_current_action = QAction("▶ 执行当前节点", menu)
         execute_current_action.triggered.connect(lambda: self._on_execute_current())
         menu.addAction(execute_current_action)
-        
+
         execute_workflow_action = QAction("▶ 执行工作流", menu)
         execute_workflow_action.triggered.connect(self._on_execute)
         menu.addAction(execute_workflow_action)
-        
+
         if self.video_path and Path(self.video_path).exists():
             copy_action = QAction("📋 复制输出文件路径", menu)
             copy_action.triggered.connect(self._copy_output_path)
             menu.addAction(copy_action)
-            
+
             open_folder_action = QAction("📁 打开文件所在文件夹", menu)
             open_folder_action.triggered.connect(self._open_video_folder)
             menu.addAction(open_folder_action)
-        
+
         return menu
-    
+
     def _open_with_system_player(self):
-        """双击：用系统默认工具打开文件（图片用图片查看器，视频用播放器）"""
         if not self.video_path or not Path(self.video_path).exists():
             return
         import subprocess
@@ -3203,14 +3358,13 @@ class OutputNode(NodeItem):
             print(f"打开文件失败: {e}")
 
     def _open_video_folder(self):
-        """打开文件所在文件夹并选中文件"""
         if self.video_path and Path(self.video_path).exists():
             import subprocess
             import platform
-            
+
             file_path = Path(self.video_path).resolve()
             folder_path = file_path.parent
-            
+
             system = platform.system()
             try:
                 if system == "Windows":
@@ -3221,40 +3375,47 @@ class OutputNode(NodeItem):
                     subprocess.run(["xdg-open", str(folder_path)], check=True)
             except Exception as e:
                 print(f"打开文件夹失败: {e}")
-    
+
     def _on_execute(self):
         if hasattr(self, 'on_execute_requested') and self.on_execute_requested:
             self.on_execute_requested(self)
-    
+
     def _on_execute_current(self):
         if hasattr(self, 'on_execute_current_requested') and self.on_execute_current_requested:
             self.on_execute_current_requested(self)
-    
+
     def _copy_output_path(self):
-        """复制输出文件路径到剪贴板（同时标记来源类型）"""
         if self.video_path and Path(self.video_path).exists():
             from PyQt5.QtWidgets import QApplication
             clipboard = QApplication.clipboard()
-            # 在路径前加标记前缀，粘贴时识别
             is_img = self.video_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp'))
             prefix = "TAPNOW_IMG:" if is_img else "TAPNOW_VID:"
             clipboard.setText(prefix + self.video_path)
-    
+
     def serialize_data(self):
         return {
             "output_name": self.name_edit.text(),
+            "batch_count": self.get_batch_count(),
             "video_path": self.video_path,
-            "thumbnail_path": self.thumbnail_path
+            "thumbnail_path": self.thumbnail_path,
+            "result_paths": self.result_paths,
+            "selected_result_index": self.selected_result_index,
         }
-    
+
     def deserialize_data(self, data):
         self.name_edit.setText(data.get("output_name", "output"))
+        self.batch_count = data.get("batch_count", 1)
+        if hasattr(self, 'batch_spin'):
+            self.batch_spin.setValue(self.batch_count)
         self.video_path = data.get("video_path", "")
         self.thumbnail_path = data.get("thumbnail_path", "")
-        
-        if self.thumbnail_path and Path(self.thumbnail_path).exists():
+        self.result_paths = data.get("result_paths", [])
+        self.selected_result_index = data.get("selected_result_index", 0)
+
+        if self.result_paths:
+            self._rebuild_result_list()
+            self._show_selected_result()
+        elif self.thumbnail_path and Path(self.thumbnail_path).exists():
             self.set_video_thumbnail(self.thumbnail_path, self.video_path)
         elif self.video_path and Path(self.video_path).exists():
-            # 序列化数据中有路径但没有缩略图，尝试自动检测
             self._auto_detect_video()
-        # 注意：如果序列化数据中没路径，set_project_path 调用时会自动检测
