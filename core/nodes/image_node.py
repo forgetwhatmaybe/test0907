@@ -1,22 +1,19 @@
 ﻿"""图片上传节点"""
 
 from PyQt5.QtWidgets import (
-    QLabel, QVBoxLayout, QPushButton, QFileDialog, QMenu, QAction, QApplication
+    QLabel, QVBoxLayout, QPushButton, QMenu, QAction, QApplication
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from pathlib import Path
-import shutil
-import platform
-import subprocess
 
-from core.node_editor.node_item import NodeItem
+from .base_media_node import BaseMediaNode
 from .cache import ThumbnailCache
 from .mask_editor import MaskEditorDialog
 from . import styles
 
 
-class ImageNode(NodeItem):
+class ImageNode(BaseMediaNode):
     """图片上传节点 - 支持图片选择、蒙版绘制、拖拽导出"""
     node_type = "image"
     
@@ -25,12 +22,8 @@ class ImageNode(NodeItem):
         self.image_path = ""
         self.mask_path = ""
         self._has_mask_output = False
-        self.project_path = None
         self.add_output("图片")
         self._update_size()
-    
-    def set_project_path(self, path):
-        self.project_path = Path(path)
     
     def _setup_content(self):
         layout = QVBoxLayout(self._content_widget)
@@ -51,29 +44,12 @@ class ImageNode(NodeItem):
     
     def load_image_file(self, file_path):
         """加载图片到节点（供拖拽上传调用）"""
-        if self.project_path:
-            material_dir = self.project_path / "素材库"
-            material_dir.mkdir(exist_ok=True)
-            file_name = Path(file_path).name
-            dest_path = material_dir / file_name
-            counter = 1
-            while dest_path.exists():
-                stem = Path(file_path).stem
-                suffix = Path(file_path).suffix
-                dest_path = material_dir / f"{stem}_{counter}{suffix}"
-                counter += 1
-            shutil.copy2(file_path, dest_path)
-            self.image_path = str(dest_path)
-        else:
-            self.image_path = file_path
+        self.image_path = self.copy_to_material_library(file_path)
         self._update_image_display()
         self._notify_downstream_thumbnail_refresh()
 
     def _select_image(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            None, "选择图片", "",
-            "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)"
-        )
+        file_path = self.create_file_dialog("选择图片", "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)")
         if file_path:
             self.load_image_file(file_path)
     
@@ -158,18 +134,7 @@ class ImageNode(NodeItem):
     
     def _open_image_folder(self):
         """打开图片所在文件夹并选中文件"""
-        if self.image_path and Path(self.image_path).exists():
-            file_path = Path(self.image_path).resolve()
-            system = platform.system()
-            try:
-                if system == "Windows":
-                    subprocess.run(["explorer", "/select,", str(file_path)], check=True)
-                elif system == "Darwin":
-                    subprocess.run(["open", str(file_path.parent)], check=True)
-                else:
-                    subprocess.run(["xdg-open", str(file_path.parent)], check=True)
-            except Exception as e:
-                print(f"打开文件夹失败: {e}")
+        self.open_file_folder(self.image_path)
 
     def _copy_image_to_clipboard(self):
         """将图片复制到剪贴板"""

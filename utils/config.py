@@ -56,6 +56,8 @@ class Config:
                 "kling": {"api_key": "", "secret_key": ""},
                 "jimeng": {"access_key": "", "secret_key": ""},
                 "gemini": {"api_key": "", "base_url": ""},
+                "veo3": {"api_key": ""},
+                "seedance2": {"api_key": ""},
                 "gemini3": {"api_key": ""},
                 "gpt52": {"api_key": ""}
             },

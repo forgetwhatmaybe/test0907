@@ -1,30 +1,23 @@
 ﻿"""视频上传节点"""
 
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QFileDialog, QMenu, QAction
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QMenu, QAction
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 from pathlib import Path
-import shutil
-import platform
-import subprocess
 
-from core.node_editor.node_item import NodeItem
+from .base_media_node import BaseMediaNode
 from . import styles
 
 
-class VideoNode(NodeItem):
+class VideoNode(BaseMediaNode):
     """视频上传节点：上传视频文件作为输入"""
     node_type = "video"
 
     def __init__(self):
         super().__init__("视频上传")
         self.video_path = ""
-        self.project_path = None
         self.add_output("视频")
         self._update_size()
-
-    def set_project_path(self, path):
-        self.project_path = Path(path)
 
     def _setup_content(self):
         layout = QVBoxLayout(self._content_widget)
@@ -45,28 +38,11 @@ class VideoNode(NodeItem):
 
     def load_video_file(self, file_path):
         """加载视频到节点（供拖拽上传调用）"""
-        if self.project_path:
-            material_dir = self.project_path / "素材库"
-            material_dir.mkdir(exist_ok=True)
-            file_name = Path(file_path).name
-            dest_path = material_dir / file_name
-            counter = 1
-            while dest_path.exists():
-                stem = Path(file_path).stem
-                suffix = Path(file_path).suffix
-                dest_path = material_dir / f"{stem}_{counter}{suffix}"
-                counter += 1
-            shutil.copy2(file_path, dest_path)
-            self.video_path = str(dest_path)
-        else:
-            self.video_path = file_path
+        self.video_path = self.copy_to_material_library(file_path)
         self._update_video_display()
 
     def _select_video(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            None, "选择视频", "",
-            "视频文件 (*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm)"
-        )
+        file_path = self.create_file_dialog("选择视频", "视频文件 (*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm)")
         if file_path:
             self.load_video_file(file_path)
 
@@ -123,15 +99,4 @@ class VideoNode(NodeItem):
         return menu
 
     def _open_video_folder(self):
-        if self.video_path and Path(self.video_path).exists():
-            file_path = Path(self.video_path).resolve()
-            system = platform.system()
-            try:
-                if system == "Windows":
-                    subprocess.run(["explorer", "/select,", str(file_path)], check=True)
-                elif system == "Darwin":
-                    subprocess.run(["open", str(file_path.parent)], check=True)
-                else:
-                    subprocess.run(["xdg-open", str(file_path.parent)], check=True)
-            except Exception as e:
-                print(f"打开文件夹失败: {e}")
+        self.open_file_folder(self.video_path)

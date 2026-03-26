@@ -222,6 +222,9 @@ class TaskRowWidget(QFrame):
             start_time = self._info.get("start_time", time.time())
             elapsed = int(time.time() - start_time)
             self.time_label.setText(self._format_time(elapsed))
+        else:
+            # 任务不在运行状态时，停止定时器
+            self._update_timer.stop()
 
     def _format_time(self, seconds):
         """格式化时间为 MM:SS 或 HH:MM:SS"""

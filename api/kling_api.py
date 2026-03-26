@@ -14,6 +14,10 @@ class KlingAPI(BaseAPI):
         self.access_key = ""
         self._omni_task_id = None  # 用于 Omni-Video 任务
         self._session = self._create_retry_session()
+        # 优化：缓存JWT token，避免频繁生成
+        self._cached_token = None
+        self._token_expiry = 0
+        self._token_buffer_time = 300  # token过期前5分钟刷新
     
     @staticmethod
     def _create_retry_session():
@@ -46,8 +50,24 @@ class KlingAPI(BaseAPI):
         }
         return jwt.encode(payload, self.secret_key, algorithm="HS256", headers=headers)
     
+    def _get_cached_token(self) -> str:
+        """获取缓存的JWT token，如果过期则重新生成"""
+        current_time = int(time.time())
+        
+        # 检查缓存的token是否有效
+        if (self._cached_token and 
+            self._token_expiry > current_time + self._token_buffer_time):
+            return self._cached_token
+        
+        # 生成新token
+        self._cached_token = self._generate_jwt_token()
+        self._token_expiry = current_time + 1800  # 30分钟后过期
+        
+        return self._cached_token
+    
     def _get_headers(self) -> dict:
-        token = self._generate_jwt_token()
+        """获取请求头（优化：使用缓存的token）"""
+        token = self._get_cached_token()
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}"

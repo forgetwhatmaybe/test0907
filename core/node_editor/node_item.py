@@ -153,6 +153,10 @@ class NodeItem(QGraphicsItem):
         # 标记是否正在执行Ctrl+点击全选操作
         self._is_selecting_connected = False
         
+        # 优化：批量更新机制
+        self._batch_update_pending = False
+        self._edges_need_update = set()
+        
         self.setFlag(QGraphicsItem.ItemIsMovable)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
@@ -210,7 +214,18 @@ class NodeItem(QGraphicsItem):
         self.update_sockets_position()
         self._update_toggle_button_position()
         self.update()
-        # socket 位置改变后立即刷新已连接的连线，避免显示偏差
+        # 优化：使用批量更新机制，避免频繁更新连线
+        self._schedule_edge_updates()
+    
+    def _schedule_edge_updates(self):
+        """调度批量连线更新"""
+        if not self._batch_update_pending:
+            self._batch_update_pending = True
+            QTimer.singleShot(0, self._batch_update_edges)
+    
+    def _batch_update_edges(self):
+        """批量更新所有连线位置"""
+        self._batch_update_pending = False
         for socket in self.inputs + self.outputs:
             for edge in socket.edges:
                 edge.update_position()
@@ -284,9 +299,8 @@ class NodeItem(QGraphicsItem):
     
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
-            for socket in self.inputs + self.outputs:
-                for edge in socket.edges:
-                    edge.update_position()
+            # 优化：使用批量更新机制，避免频繁更新连线
+            self._schedule_edge_updates()
         
         # 拦截选中状态变化，在Ctrl+点击全选时阻止Qt的默认toggle行为
         if change == QGraphicsItem.ItemSelectedChange:
@@ -327,9 +341,29 @@ class NodeItem(QGraphicsItem):
         self.setSelected(True)
     
     def _select_connected_nodes(self):
+        """优化：使用迭代替代递归，避免栈溢出风险"""
         connected_nodes = set()
         visited = set()
-        self._collect_connected_nodes(self, connected_nodes, visited)
+        stack = [self]
+        
+        while stack:
+            node = stack.pop()
+            if node.id in visited:
+                continue
+            visited.add(node.id)
+            connected_nodes.add(node)
+            
+            # 收集上游节点
+            for socket in node.inputs:
+                for edge in socket.edges:
+                    if edge.start_socket and edge.start_socket.node:
+                        stack.append(edge.start_socket.node)
+            
+            # 收集下游节点
+            for socket in node.outputs:
+                for edge in socket.edges:
+                    if edge.end_socket and edge.end_socket.node:
+                        stack.append(edge.end_socket.node)
         
         scene = self.scene()
         if scene:
@@ -340,22 +374,6 @@ class NodeItem(QGraphicsItem):
         
         # 确保当前节点被选中（解决 Ctrl+点击时当前节点选中状态问题）
         self.setSelected(True)
-    
-    def _collect_connected_nodes(self, node, collected, visited):
-        if node.id in visited:
-            return
-        visited.add(node.id)
-        collected.add(node)
-        
-        for socket in node.inputs:
-            for edge in socket.edges:
-                if edge.start_socket and edge.start_socket.node:
-                    self._collect_connected_nodes(edge.start_socket.node, collected, visited)
-        
-        for socket in node.outputs:
-            for edge in socket.edges:
-                if edge.end_socket and edge.end_socket.node:
-                    self._collect_connected_nodes(edge.end_socket.node, collected, visited)
     
     def _create_context_menu(self):
         return None

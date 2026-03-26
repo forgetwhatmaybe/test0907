@@ -1,7 +1,8 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QTabWidget, QWidget, QGroupBox, QMessageBox,
-    QComboBox, QFormLayout, QCheckBox
+    QComboBox, QFormLayout, QCheckBox, QListWidget, QListWidgetItem,
+    QStackedWidget
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -14,6 +15,7 @@ from api.kling_api import KlingAPI
 from api.jimeng_api import JimengAPI
 from api.gemini_api import GeminiAPI
 from api.text_vision_api import TextVisionAPI
+from api.seedance2_api import Seedance2API
 
 
 class TestConnectionThread(QThread):
@@ -193,33 +195,87 @@ class APISettingsDialog(QDialog):
         """)
     
     def _init_ui(self):
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
         
-        tab_widget = QTabWidget()
+        # 左侧列表
+        self.api_list = QListWidget()
+        self.api_list.setFixedWidth(150)
+        self.api_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2d2d2d;
+                border: 1px solid #444;
+                border-radius: 4px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #3a3a3a;
+            }
+            QListWidget::item:selected {
+                background-color: #0078d4;
+            }
+            QListWidget::item:hover {
+                background-color: #3d3d3d;
+            }
+        """)
         
-        kling_tab = self._create_kling_tab()
-        tab_widget.addTab(kling_tab, "可灵 AI")
+        # 添加 API 列表项
+        apis = [
+            ("可灵 AI", "kling"),
+            ("即梦 AI", "jimeng"),
+            ("🍌 香蕉模型", "gemini"),
+            ("🎬 Veo3视频", "veo3"),
+            ("🎬 Seedance 2.0", "seedance2"),
+            ("🔮 Gemini", "gemini3"),
+            ("🤖 GPT", "gpt52"),
+            ("通用设置", "general")
+        ]
         
-        jimeng_tab = self._create_jimeng_tab()
-        tab_widget.addTab(jimeng_tab, "即梦 AI")
+        for name, key in apis:
+            item = QListWidgetItem(name)
+            item.setData(Qt.UserRole, key)
+            self.api_list.addItem(item)
         
-        gemini_tab = self._create_gemini_tab()
-        tab_widget.addTab(gemini_tab, "🍌 香蕉模型")
+        self.api_list.currentRowChanged.connect(self._on_api_selected)
         
-        veo3_tab = self._create_veo3_tab()
-        tab_widget.addTab(veo3_tab, "🎬 Veo3视频")
+        # 右侧内容区
+        self.stacked_widget = QStackedWidget()
         
-        gemini3_tab = self._create_gemini3_tab()
-        tab_widget.addTab(gemini3_tab, "🔮 Gemini")
+        # 创建各个设置页面
+        self.kling_page = self._create_kling_tab()
+        self.stacked_widget.addWidget(self.kling_page)
         
-        gpt52_tab = self._create_gpt52_tab()
-        tab_widget.addTab(gpt52_tab, "🤖 GPT")
+        self.jimeng_page = self._create_jimeng_tab()
+        self.stacked_widget.addWidget(self.jimeng_page)
         
-        general_tab = self._create_general_tab()
-        tab_widget.addTab(general_tab, "通用设置")
+        self.gemini_page = self._create_gemini_tab()
+        self.stacked_widget.addWidget(self.gemini_page)
         
-        layout.addWidget(tab_widget)
+        self.veo3_page = self._create_veo3_tab()
+        self.stacked_widget.addWidget(self.veo3_page)
         
+        self.seedance2_page = self._create_seedance2_tab()
+        self.stacked_widget.addWidget(self.seedance2_page)
+        
+        self.gemini3_page = self._create_gemini3_tab()
+        self.stacked_widget.addWidget(self.gemini3_page)
+        
+        self.gpt52_page = self._create_gpt52_tab()
+        self.stacked_widget.addWidget(self.gpt52_page)
+        
+        self.general_page = self._create_general_tab()
+        self.stacked_widget.addWidget(self.general_page)
+        
+        # 左侧面板布局
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(QLabel("选择 API:"))
+        left_layout.addWidget(self.api_list)
+        left_layout.addStretch()
+        
+        # 右侧面板布局
+        right_layout = QVBoxLayout()
+        right_layout.addWidget(self.stacked_widget)
+        
+        # 按钮布局
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
@@ -234,7 +290,25 @@ class APISettingsDialog(QDialog):
         button_layout.addWidget(save_btn)
         button_layout.addWidget(cancel_btn)
         
-        layout.addLayout(button_layout)
+        right_layout.addLayout(button_layout)
+        
+        # 主布局
+        left_widget = QWidget()
+        left_widget.setLayout(left_layout)
+        left_widget.setFixedWidth(180)
+        
+        right_widget = QWidget()
+        right_widget.setLayout(right_layout)
+        
+        layout.addWidget(left_widget)
+        layout.addWidget(right_widget)
+        
+        # 默认选择第一项
+        self.api_list.setCurrentRow(0)
+    
+    def _on_api_selected(self, index):
+        """当选择不同的 API 时切换右侧内容"""
+        self.stacked_widget.setCurrentIndex(index)
     
     def _create_kling_tab(self) -> QWidget:
         widget = QWidget()
@@ -403,6 +477,55 @@ class APISettingsDialog(QDialog):
         
         return widget
     
+    def _create_seedance2_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        group = QGroupBox("🎬 Seedance 2.0 视频生成 API 密钥")
+        form_layout = QFormLayout(group)
+        
+        self.seedance2_api_key_edit = QLineEdit()
+        self.seedance2_api_key_edit.setPlaceholderText("请输入 API Key")
+        self.seedance2_api_key_edit.setEchoMode(QLineEdit.Password)
+        ak_label = QLabel("API Key:")
+        ak_label.setStyleSheet("color: #e0e0e0;")
+        form_layout.addRow(ak_label, self.seedance2_api_key_edit)
+        
+        self.seedance2_show_keys_cb = QPushButton("显示密钥")
+        self.seedance2_show_keys_cb.setCheckable(True)
+        self.seedance2_show_keys_cb.toggled.connect(self._toggle_seedance2_keys_visibility)
+        form_layout.addRow("", self.seedance2_show_keys_cb)
+        
+        layout.addWidget(group)
+        
+        test_btn = QPushButton("测试连接")
+        test_btn.clicked.connect(self._test_seedance2_connection)
+        layout.addWidget(test_btn)
+        
+        layout.addStretch()
+        
+        hint_label = QLabel(
+            "提示：\n"
+            "1. Seedance 2.0 支持多模态输入：\n"
+            "   • 文生视频：仅提示词\n"
+            "   • 图生视频：提示词 + 1张图片\n"
+            "   • 首尾帧：提示词 + 2张图片\n"
+            "   • 多模态：图片+视频+音频+@tag引用\n\n"
+            "2. 特性：\n"
+            "   • 支持 4-15 秒视频时长\n"
+            "   • 支持 480p/720p/1080p 分辨率\n"
+            "   • 支持 16:9/9:16/1:1 等多种比例\n"
+            "   • 支持自动生成同步音频\n"
+            "   • 支持 @tag 引用控制生成\n\n"
+            "3. 获取 API Key：\n"
+            "   访问 https://seedance2api.app 注册获取"
+        )
+        hint_label.setStyleSheet("color: #888888; font-size: 11px;")
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+        
+        return widget
+    
     def _create_gemini3_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -555,6 +678,14 @@ class APISettingsDialog(QDialog):
             self.veo3_api_key_edit.setEchoMode(QLineEdit.Password)
             self.veo3_show_keys_cb.setText("显示密钥")
     
+    def _toggle_seedance2_keys_visibility(self, checked):
+        if checked:
+            self.seedance2_api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.seedance2_show_keys_cb.setText("隐藏密钥")
+        else:
+            self.seedance2_api_key_edit.setEchoMode(QLineEdit.Password)
+            self.seedance2_show_keys_cb.setText("显示密钥")
+    
     def _toggle_gemini3_keys_visibility(self, checked):
         if checked:
             self.gemini3_api_key_edit.setEchoMode(QLineEdit.Normal)
@@ -615,6 +746,21 @@ class APISettingsDialog(QDialog):
         
         self._show_testing_dialog()
         self.test_thread = TestConnectionThread(api, "🍌 香蕉模型 (Gemini)")
+        self.test_thread.finished_signal.connect(self._on_test_finished)
+        self.test_thread.start()
+    
+    def _test_seedance2_connection(self):
+        api_key = self.seedance2_api_key_edit.text()
+        
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请输入 Seedance 2.0 API Key")
+            return
+        
+        api = Seedance2API()
+        api.set_credentials(api_key)
+        
+        self._show_testing_dialog()
+        self.test_thread = TestConnectionThread(api, "🎬 Seedance 2.0")
         self.test_thread.finished_signal.connect(self._on_test_finished)
         self.test_thread.start()
     
@@ -686,6 +832,9 @@ class APISettingsDialog(QDialog):
         veo3_keys = self.config.get_api_keys("veo3")
         self.veo3_api_key_edit.setText(veo3_keys.get("api_key", ""))
         
+        seedance2_keys = self.config.get_api_keys("seedance2")
+        self.seedance2_api_key_edit.setText(seedance2_keys.get("api_key", ""))
+        
         gemini3_keys = self.config.get_api_keys("gemini3")
         self.gemini3_api_key_edit.setText(gemini3_keys.get("api_key", ""))
         
@@ -716,6 +865,10 @@ class APISettingsDialog(QDialog):
         
         self.config.set_api_keys("veo3", {
             "api_key": self.veo3_api_key_edit.text()
+        })
+        
+        self.config.set_api_keys("seedance2", {
+            "api_key": self.seedance2_api_key_edit.text()
         })
         
         self.config.set_api_keys("gemini3", {

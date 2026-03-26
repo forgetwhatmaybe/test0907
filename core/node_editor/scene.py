@@ -1,27 +1,53 @@
 from PyQt5.QtWidgets import QGraphicsScene, QGraphicsItem
-from PyQt5.QtCore import Qt, QPointF, QRectF
+from PyQt5.QtCore import Qt, QPointF, QRectF, QTimer, QDateTime
 from PyQt5.QtGui import QColor
 import json
+import weakref
+import time
 
 
 class NodeScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._base_size = 10000
-        self._margin = 2000  # 边界外扩余量
+        # 优化：减小初始场景大小，按需动态扩展
+        self._base_size = 2000
+        self._margin = 500  # 边界外扩余量
+        self._expand_threshold = 0.8  # 扩展阈值：当节点占用80%空间时才扩展
         self.setSceneRect(-self._base_size // 2, -self._base_size // 2,
                           self._base_size, self._base_size)
         self.nodes = {}
         self.edges = []
         self._grid_size = 20
+        
+        # 优化：缓存边界矩形计算结果
+        self._cached_items_rect = None
+        self._items_rect_dirty = True
+        self._last_expand_time = 0
+        self._expand_cooldown = 100  # 扩展冷却时间（毫秒）
+    
+    def _get_cached_items_rect(self):
+        """获取缓存的边界矩形，如果脏则重新计算"""
+        if self._items_rect_dirty or self._cached_items_rect is None:
+            self._cached_items_rect = self.itemsBoundingRect()
+            self._items_rect_dirty = False
+        return self._cached_items_rect
+    
+    def _mark_items_rect_dirty(self):
+        """标记边界矩形缓存为脏"""
+        self._items_rect_dirty = True
     
     def _auto_expand_scene(self):
-        """根据所有节点的位置自动扩展场景范围"""
+        """根据所有节点的位置自动扩展场景范围（优化版）"""
         if not self.nodes:
             return
         
+        # 检查冷却时间，避免频繁扩展
+        current_time = int(time.time() * 1000)  # 转换为毫秒
+        if current_time - self._last_expand_time < self._expand_cooldown:
+            return
+        
         current = self.sceneRect()
-        items_rect = self.itemsBoundingRect()
+        items_rect = self._get_cached_items_rect()
         
         # 如果所有节点都在当前场景范围内（留有余量），不需要扩展
         padded = current.adjusted(self._margin, self._margin,
@@ -29,16 +55,43 @@ class NodeScene(QGraphicsScene):
         if padded.contains(items_rect):
             return
         
+        # 计算当前使用率，只有超过阈值才扩展
+        current_area = current.width() * current.height()
+        items_area = items_rect.width() * items_rect.height()
+        usage_ratio = items_area / current_area if current_area > 0 else 0
+        
+        if usage_ratio < self._expand_threshold:
+            # 使用率不高，不扩展
+            return
+        
         # 扩展场景，确保所有节点都在范围内，并留足余量
-        new_rect = current.united(items_rect.adjusted(
+        # 使用增量扩展策略：每次扩展50%，而不是一次性扩展到足够大
+        expansion_factor = 1.5
+        new_width = current.width() * expansion_factor
+        new_height = current.height() * expansion_factor
+        
+        # 计算新的中心点（保持当前视图中心）
+        center = current.center()
+        new_rect = QRectF(
+            center.x() - new_width / 2,
+            center.y() - new_height / 2,
+            new_width,
+            new_height
+        )
+        
+        # 确保所有节点都在新范围内
+        new_rect = new_rect.united(items_rect.adjusted(
             -self._margin, -self._margin,
             self._margin, self._margin
         ))
+        
         self.setSceneRect(new_rect)
+        self._last_expand_time = current_time
     
     def add_node(self, node):
         self.nodes[node.id] = node
         self.addItem(node)
+        self._mark_items_rect_dirty()  # 标记缓存为脏
         self._auto_expand_scene()
     
     def remove_node(self, node):
@@ -50,6 +103,7 @@ class NodeScene(QGraphicsScene):
                 edge.remove()
         
         self.removeItem(node)
+        self._mark_items_rect_dirty()  # 标记缓存为脏
     
     def add_edge(self, edge):
         self.edges.append(edge)
@@ -127,20 +181,21 @@ class NodeScene(QGraphicsScene):
             if hasattr(node, '_restore_image_order'):
                 node._restore_image_order()
         
-        # 延迟一帧全量刷新所有连线位置
+        # 优化：合并为单次延迟刷新，减少定时器开销
         # 解决 Qt proxy widget 布局延迟导致连线共维偏差问题
-        from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, self._refresh_all_edges)
     
     def _refresh_all_edges(self):
-        """\u5237\u65b0\u6240\u6709\u8fde\u7ebf\u7684\u663e\u793a\u4f4d\u7f6e\uff08\u5ef6\u8fdf\u6267\u884c\u4ee5\u7b49\u5f85 Qt \u5e03\u5c40\u5b8c\u6210\uff09"""
+        """刷新所有连线的显示位置（优化版：合并两次刷新为一次）"""
+        # 第一次刷新
         for edge in self.edges:
             edge.update_position()
-        # \u518d\u6b21\u5ef6\u8fdf\u4e00\u5e27\uff08\u90e8\u5206\u8282\u70b9\u5982 OutputNode \u9700\u8981\u4e24\u6b21\u5e03\u5c40\u624d\u7a33\u5b9a\uff09
-        from PyQt5.QtCore import QTimer
+        
+        # 使用 singleShot 延迟一帧执行第二次刷新
+        # 解决部分节点如 OutputNode 需要两次布局才稳定的问题
         QTimer.singleShot(50, self._refresh_all_edges_final)
     
     def _refresh_all_edges_final(self):
-        """\u6700\u7ec8\u4e00\u6b21\u5237\u65b0\uff0c\u786e\u4fdd\u8fde\u7ebf\u4f4d\u7f6e\u5b8c\u5168\u6b63\u786e"""
+        """最终一次刷新，确保连线位置完全正确"""
         for edge in self.edges:
             edge.update_position()

@@ -21,13 +21,15 @@ from core.nodes.nodes import (
 )
 from core.nodes.text_vision_node import TextVisionNode
 from core.nodes.text_display_node import TextDisplayNode
+from core.nodes.audio_node import AudioNode
+from core.nodes.api_nodes.seedance2_node import Seedance2APINode
 from ui.node_panel import NodePanel
 from ui.api_settings_dialog import APISettingsDialog
 from ui.video_player import VideoPlayerDialog
 from ui.task_queue import TaskQueueManager, QueueDialog
 from utils.config import Config
 from utils.project_manager import ProjectManager
-from utils.file_utils import download_file, compress_image_if_needed
+from utils.file_utils import download_file, compress_image_if_needed, convert_video_to_mp4, convert_audio_to_mp3
 from api.kling_api import KlingAPI
 from api.jimeng_api import JimengAPI
 from api.gemini_api import GeminiAPI
@@ -41,8 +43,10 @@ NODE_REGISTRY = {
     "jimeng_api": JimengAPINode,
     "gemini_api": GeminiAPINode,
     "veo_api": VeoAPINode,
+    "seedance2_api": Seedance2APINode,
     "image_edit": ImageEditNode,
     "video": VideoNode,
+    "audio": AudioNode,
     "output": OutputNode,
     "text_vision": TextVisionNode,
     "text_display": TextDisplayNode,
@@ -162,7 +166,7 @@ class ExecuteThread(QThread):
                     self.finished_signal.emit(False, "⬛ 执行已停止")
                     return
                 
-                api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "image_edit", "text_vision"}
+                api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "seedance2_api", "image_edit", "text_vision"}
                 if node.node_type not in api_types:
                     continue
                 
@@ -176,6 +180,8 @@ class ExecuteThread(QThread):
                         self._execute_gemini_node(node)
                     elif node.node_type == "veo_api":
                         self._execute_veo_node(node)
+                    elif node.node_type == "seedance2_api":
+                        self._execute_seedance2_node(node)
                     elif node.node_type == "image_edit":
                         self._execute_image_edit_node(node)
                     elif node.node_type == "text_vision":
@@ -248,23 +254,23 @@ class ExecuteThread(QThread):
         return order
     
     def _collect_downstream_outputs(self, node, nodes_list, visited):
-        """递归收集下游的 OutputNode"""
-        if node.id in visited:
-            return
-        visited.add(node.id)
-        if node.node_type == "output":
-            nodes_list.append(node)
-            # 继续向下游
-            for socket in node.outputs:
+        """迭代收集下游的 OutputNode（优化：使用迭代替代递归）"""
+        stack = [node]
+        
+        while stack:
+            current_node = stack.pop()
+            if current_node.id in visited:
+                continue
+            visited.add(current_node.id)
+            
+            if current_node.node_type == "output":
+                nodes_list.append(current_node)
+            
+            # 将所有下游节点加入栈
+            for socket in current_node.outputs:
                 for edge in socket.edges:
                     if edge.end_socket:
-                        self._collect_downstream_outputs(edge.end_socket.node, nodes_list, visited)
-        else:
-            # 非OutputNode，找它的下游OutputNode
-            for socket in node.outputs:
-                for edge in socket.edges:
-                    if edge.end_socket:
-                        self._collect_downstream_outputs(edge.end_socket.node, nodes_list, visited)
+                        stack.append(edge.end_socket.node)
     
     def _get_input_images(self, node):
         images = {"first": None, "last": None}
@@ -338,7 +344,7 @@ class ExecuteThread(QThread):
         return result[:14]
     
     def _execute_kling_node(self, node):
-        """执行可灵生视频节点，失败后持续重试，20分钟超时"""
+        """执行可灵生视频节点，失败后持续重试，20分钟超时（优化版）"""
         self.progress.emit(f"正在执行: {node.title}")
         
         images = self._get_input_images(node)
@@ -347,7 +353,9 @@ class ExecuteThread(QThread):
         if not image_path:
             raise Exception(f"节点 '{node.title}' 没有输入图片")
         
-        image_path = compress_image_if_needed(image_path, 4.7)
+        # 优化：只在需要时压缩图片
+        if get_file_size_mb(image_path) > 4.7:
+            image_path = compress_image_if_needed(image_path, 4.7)
         
         keys = self.config.get_api_keys("kling")
         if not keys.get("access_key") or not keys.get("secret_key"):
@@ -356,23 +364,28 @@ class ExecuteThread(QThread):
         api = KlingAPI()
         api.set_credentials(keys["access_key"], keys["secret_key"])
         api._on_rate_limit = lambda wait, msg, attempt, total: \
-            self.progress.emit(f"⏳ 并发限制，等待中...")
+            self.progress.emit(f"⏳ 并发限制，等待{wait}秒...")
         
         params = node.get_params().copy()
         if images["last"]:
-            params["tail_image"] = compress_image_if_needed(images["last"], 4.7)
+            # 优化：只在需要时压缩尾帧图片
+            if get_file_size_mb(images["last"]) > 4.7:
+                params["tail_image"] = compress_image_if_needed(images["last"], 4.7)
+            else:
+                params["tail_image"] = images["last"]
         
         import time as _time
         start_time = _time.time()
         timeout = 1200
         attempt = 0
+        max_retries = 6  # 最大重试次数
         
-        while _time.time() - start_time < timeout:
+        while _time.time() - start_time < timeout and attempt < max_retries:
             if self.isInterruptionRequested():
                 raise _StoppedException()
             
             attempt += 1
-            self.progress.emit(f"等待视频生成...")
+            self.progress.emit(f"等待视频生成... (尝试 {attempt}/{max_retries})")
             
             try:
                 prompt = params.get("prompt", "")
@@ -407,12 +420,15 @@ class ExecuteThread(QThread):
                 raise
             except Exception as e:
                 elapsed = int(_time.time() - start_time)
-                if elapsed < timeout:
-                    _time.sleep(5)
+                if elapsed < timeout and attempt < max_retries:
+                    # 优化：使用指数退避策略
+                    wait_time = min(5 * (2 ** (attempt - 1)), 30)  # 最大等待30秒
+                    self.progress.emit(f"⏳ 重试中，等待{wait_time}秒...")
+                    _time.sleep(wait_time)
                 else:
                     break
         
-        raise Exception(f"视频生成失败(已超时20分钟)")
+        raise Exception(f"视频生成失败(已重试{attempt}次或超时20分钟)")
     
     def _execute_jimeng_node(self, node):
         """执行即梦生视频节点，失败后持续重试，20分钟超时"""
@@ -665,6 +681,153 @@ class ExecuteThread(QThread):
                 else:
                     break
         
+        raise Exception(f"视频生成失败(已超时20分钟)")
+
+    def _execute_seedance2_node(self, node):
+        """执行 Seedance 2.0 生视频节点，支持三种模式"""
+        self.progress.emit(f"正在执行: {node.title}")
+
+        # 获取生成模式
+        mode = getattr(node, 'generation_mode', 'multimodal')
+
+        # 获取 API Key
+        keys = self.config.get_api_keys("seedance2")
+        if not keys.get("api_key"):
+            raise Exception("请先配置 Seedance 2.0 的 API 密钥（在设置 → Seedance 2.0）")
+
+        from api.seedance2_api import Seedance2API
+        api = Seedance2API()
+        api.set_credentials(keys["api_key"])
+
+        params = node.get_params()
+        prompt = params.get("prompt", "")
+        if not prompt:
+            raise Exception(f"节点 '{node.title}' 没有设置提示词")
+
+        # 根据模式收集输入
+        image_urls = None
+        video_urls = None
+        audio_urls = None
+
+        import base64 as _b64
+
+        def _file_to_data_url(file_path):
+            """将文件转换为 data URL"""
+            from pathlib import Path as _Path
+            suffix = _Path(file_path).suffix.lower()
+            mime_map = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".webp": "image/webp",
+                ".bmp": "image/bmp", ".gif": "image/gif", ".tiff": "image/tiff",
+                ".mp4": "video/mp4", ".mov": "video/quicktime",
+                ".mp3": "audio/mpeg", ".wav": "audio/wav",
+            }
+            mime = mime_map.get(suffix, "application/octet-stream")
+            with open(file_path, "rb") as f:
+                data = _b64.b64encode(f.read()).decode()
+            return f"data:{mime};base64,{data}"
+
+        if mode == "multimodal":
+            # 参考生视频模式：收集所有图片、视频、音频
+            image_paths = node.get_ordered_image_paths()
+            video_paths = node.get_ordered_video_paths()
+            audio_paths = node.get_ordered_audio_paths()
+            
+            # 预处理文件
+            self.progress.emit("正在预处理文件...")
+            image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths] if image_paths else None
+            video_paths = [convert_video_to_mp4(p, 50) for p in video_paths] if video_paths else None
+            audio_paths = [convert_audio_to_mp3(p, 15) for p in audio_paths] if audio_paths else None
+            
+            image_urls = [_file_to_data_url(p) for p in image_paths] if image_paths else None
+            video_urls = [_file_to_data_url(p) for p in video_paths] if video_paths else None
+            audio_urls = [_file_to_data_url(p) for p in audio_paths] if audio_paths else None
+        elif mode == "image_to_video":
+            # 图生视频模式：只收集图片
+            image_paths = node.get_ordered_image_paths()
+            
+            # 预处理图片
+            self.progress.emit("正在预处理图片...")
+            image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths] if image_paths else None
+            
+            image_urls = [_file_to_data_url(p) for p in image_paths] if image_paths else None
+        elif mode == "first_last_frame":
+            # 首尾帧模式：收集首帧和尾帧图片
+            image_paths = node.get_ordered_image_paths()
+            if len(image_paths) < 2:
+                raise Exception(f"节点 '{node.title}' 首尾帧模式需要至少2张图片（首帧和尾帧）")
+            
+            # 预处理图片
+            self.progress.emit("正在预处理图片...")
+            image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths[:2]]
+            
+            image_urls = [_file_to_data_url(p) for p in image_paths]
+
+        import time as _time
+        start_time = _time.time()
+        timeout = 1200
+        attempt = 0
+
+        while _time.time() - start_time < timeout:
+            if self.isInterruptionRequested():
+                raise _StoppedException()
+
+            attempt += 1
+            self.progress.emit(f"等待视频生成...")
+
+            try:
+                task_id = api.submit_video_task(
+                    prompt=prompt,
+                    image_urls=image_urls,
+                    video_urls=video_urls,
+                    audio_urls=audio_urls,
+                    duration=params.get("duration", 5),
+                    quality=params.get("quality", "720p"),
+                    aspect_ratio=params.get("aspect_ratio", "16:9"),
+                    generate_audio=params.get("generate_audio", True),
+                )
+
+                video_url = api.wait_for_completion(
+                    task_id,
+                    timeout=600,
+                    is_stopped=self.isInterruptionRequested
+                )
+
+                if self.isInterruptionRequested():
+                    raise _StoppedException()
+
+                if video_url:
+                    output_nodes = self._get_target_output_nodes(node)
+                    for output_node in output_nodes:
+                        output_name = output_node.get_output_name()
+                        save_path = self.project_manager.get_output_path(output_name)
+
+                        import requests
+                        resp = requests.get(video_url, timeout=120)
+                        if resp.status_code == 200:
+                            with open(str(save_path), 'wb') as f:
+                                f.write(resp.content)
+                        else:
+                            raise Exception(f"视频下载失败: HTTP {resp.status_code}")
+
+                        thumb_path = str(save_path).replace(".mp4", "_thumb.jpg")
+                        self._extract_thumbnail(str(save_path), thumb_path)
+
+                        output_node.video_path = str(save_path)
+                        self.video_generated.emit(str(save_path), output_node.id)
+
+                    self.progress.emit(f"✅ 视频生成完成")
+                    return
+
+            except _StoppedException:
+                raise
+            except Exception as e:
+                elapsed = int(_time.time() - start_time)
+                if elapsed < timeout:
+                    _time.sleep(5)
+                else:
+                    break
+
         raise Exception(f"视频生成失败(已超时20分钟)")
       
     def _execute_image_edit_node(self, node):
@@ -1392,7 +1555,7 @@ class EditorWindow(QMainWindow):
             for edge in socket.edges:
                 if edge.start_socket:
                     src_node = edge.start_socket.node
-                    api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "image_edit", "text_vision"}
+                    api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "seedance2_api", "image_edit", "text_vision"}
                     if src_node.node_type in api_types:
                         direct_api_node = src_node
                         break
@@ -1844,6 +2007,8 @@ class EditorWindow(QMainWindow):
                         return "香蕉生图"
                     elif src.node_type == "veo_api":
                         return "Veo生视频"
+                    elif src.node_type == "seedance2_api":
+                        return "Seedance 2.0"
                     elif src.node_type == "image_edit":
                         mode = getattr(src, 'edit_mode', '图片修改')
                         return mode

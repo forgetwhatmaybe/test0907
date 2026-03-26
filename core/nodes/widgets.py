@@ -1,4 +1,3 @@
-"""共享的自定义 UI 组件"""
 
 from PyQt5.QtWidgets import (
     QPushButton, QLabel, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QMenu, QAction,
@@ -220,11 +219,10 @@ class DraggableThumbnail(QLabel):
         super().mouseReleaseEvent(event)
 
 
-class ImageThumbnailStrip(QWidget):
-    """可拖拽排序的图片缩略图条
+class BaseThumbnailStrip(QWidget):
+    """可拖拽排序的缩略图条基类
     
-    显示在提示词上方，使用鼠标事件（非 QDrag）实现拖拽排序，
-    因为 QGraphicsProxyWidget 内部无法正常使用 QDrag。
+    封装通用的拖拽排序逻辑，子类只需实现 _create_thumbnail 方法。
     使用 QGridLayout 实现自动换行，每行4张缩略图。
     
     Signals:
@@ -233,11 +231,10 @@ class ImageThumbnailStrip(QWidget):
     
     order_changed = pyqtSignal()
     COLS = 4  # 每行显示4张
-    THUMB_SIZE = 40
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._ordered_items = []  # [(node_id, image_path), ...]
+        self._ordered_items = []  # [(node_id, path), ...]
         self._dragging = False
         self._drag_source_idx = -1
         self._drag_start_global = None
@@ -247,7 +244,15 @@ class ImageThumbnailStrip(QWidget):
         self._grid_layout.setContentsMargins(2, 2, 2, 2)
         self._grid_layout.setSpacing(3)
         
-        self.setFixedHeight(0)  # 无图片时隐藏
+        self.setFixedHeight(0)  # 无内容时隐藏
+    
+    def _create_thumbnail(self, node_id, path, index):
+        """创建缩略图控件，子类必须实现"""
+        raise NotImplementedError
+    
+    def _get_thumbnail_widget_class(self):
+        """返回缩略图控件类，用于 _find_closest_index 和 _update_highlight"""
+        raise NotImplementedError
     
     def _on_thumbnail_clicked(self, image_path):
         """缩略图预览按钮被点击时显示大图预览"""
@@ -325,8 +330,9 @@ class ImageThumbnailStrip(QWidget):
             return
         
         for i, (node_id, path) in enumerate(self._ordered_items):
-            thumb = DraggableThumbnail(node_id, path, i, self)
-            thumb.preview_clicked.connect(self._on_thumbnail_clicked)
+            thumb = self._create_thumbnail(node_id, path, i)
+            if hasattr(thumb, 'preview_clicked'):
+                thumb.preview_clicked.connect(self._on_thumbnail_clicked)
             row = i // self.COLS
             col = i % self.COLS
             self._grid_layout.addWidget(thumb, row, col)
@@ -413,3 +419,231 @@ class ImageThumbnailStrip(QWidget):
                     w._update_style(True)
                 else:
                     w._update_style(False)
+
+
+class DraggableVideoThumbnail(QLabel):
+    """可拖拽的视频缩略图标签"""
+    
+    preview_clicked = pyqtSignal(str)
+    
+    def __init__(self, node_id, video_path, index, parent_strip):
+        super().__init__()
+        self.node_id = node_id
+        self.video_path = video_path
+        self.index = index
+        self._parent_strip = parent_strip
+        self._pixmap_loaded = False
+        self._drag_start_pos = None
+        
+        self.setFixedSize(40, 40)
+        self.setAlignment(Qt.AlignCenter)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setToolTip(f"#{index + 1} {Path(video_path).name}\n拖拽排序")
+        self._update_style(False)
+        
+        QTimer.singleShot(0, self._load_thumbnail)
+    
+    def _load_thumbnail(self):
+        if self._pixmap_loaded:
+            return
+        try:
+            import cv2
+            cap = cv2.VideoCapture(self.video_path)
+            ret, frame = cap.read()
+            cap.release()
+            if ret:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = frame_rgb.shape
+                from PyQt5.QtGui import QImage, QPixmap
+                q_img = QImage(frame_rgb.tobytes(), w, h, ch * w, QImage.Format_RGB888).copy()
+                pixmap = QPixmap.fromImage(q_img).scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.setPixmap(pixmap)
+            else:
+                self.setText("🎬")
+        except ImportError:
+            self.setText("🎬")
+        self._pixmap_loaded = True
+    
+    def _update_style(self, dragging):
+        if dragging:
+            self.setStyleSheet(styles.THUMBNAIL_DRAGGING)
+        else:
+            self.setStyleSheet(styles.THUMBNAIL.replace("border: 2px solid #555;", "border: 2px solid #7B1FA2;"))
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            self._update_style(True)
+            self._parent_strip._start_drag(self.index, event.globalPos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_start_pos is not None:
+            distance = (event.pos() - self._drag_start_pos).manhattanLength()
+            if distance >= 10:
+                self._parent_strip._update_drag(event.globalPos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.setCursor(Qt.OpenHandCursor)
+            self._update_style(False)
+            self._parent_strip._finish_drag(event.globalPos())
+            self._drag_start_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class VideoThumbnailStrip(BaseThumbnailStrip):
+    """可拖拽排序的视频缩略图条"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    def _create_thumbnail(self, node_id, path, index):
+        return DraggableVideoThumbnail(node_id, path, index, self)
+    
+    def _get_thumbnail_widget_class(self):
+        return DraggableVideoThumbnail
+    
+    def get_ordered_video_paths(self):
+        return [path for _, path in self._ordered_items]
+    
+    def _find_closest_index(self, local_pos):
+        if not self._ordered_items:
+            return 0
+        
+        min_dist = float('inf')
+        target_idx = len(self._ordered_items)
+        
+        for i in range(self._grid_layout.count()):
+            w = self._grid_layout.itemAt(i).widget()
+            if w and isinstance(w, DraggableVideoThumbnail):
+                center = w.geometry().center()
+                dx = local_pos.x() - center.x()
+                dy = local_pos.y() - center.y()
+                dist = dx * dx + dy * dy
+                if dist < min_dist:
+                    min_dist = dist
+                    if local_pos.x() < center.x():
+                        target_idx = w.index
+                    else:
+                        target_idx = w.index + 1
+        return target_idx
+
+
+class DraggableAudioThumbnail(QLabel):
+    """可拖拽的音频缩略图标签"""
+    
+    def __init__(self, node_id, audio_path, index, parent_strip):
+        super().__init__()
+        self.node_id = node_id
+        self.audio_path = audio_path
+        self.index = index
+        self._parent_strip = parent_strip
+        self._drag_start_pos = None
+        
+        name = Path(audio_path).name
+        if len(name) > 10:
+            name = name[:8] + ".."
+        self.setText(f"🎵{name}")
+        
+        self.setFixedSize(48, 40)
+        self.setAlignment(Qt.AlignCenter)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setToolTip(f"#{index + 1} {Path(audio_path).name}\n拖拽排序")
+        self._update_style(False)
+    
+    def _update_style(self, dragging):
+        if dragging:
+            self.setStyleSheet(styles.THUMBNAIL_DRAGGING)
+        else:
+            self.setStyleSheet(
+                "QLabel { background-color: #2a2a2a; border: 2px solid #00BCD4; border-radius: 5px; color: #00BCD4; font-size: 9px; }"
+            )
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            self._update_style(True)
+            self._parent_strip._start_drag(self.index, event.globalPos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_start_pos is not None:
+            distance = (event.pos() - self._drag_start_pos).manhattanLength()
+            if distance >= 10:
+                self._parent_strip._update_drag(event.globalPos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.setCursor(Qt.OpenHandCursor)
+            self._update_style(False)
+            self._parent_strip._finish_drag(event.globalPos())
+            self._drag_start_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class ImageThumbnailStrip(BaseThumbnailStrip):
+    """可拖拽排序的图片缩略图条"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    def _create_thumbnail(self, node_id, path, index):
+        return DraggableThumbnail(node_id, path, index, self)
+    
+    def _get_thumbnail_widget_class(self):
+        return DraggableThumbnail
+
+
+class AudioThumbnailStrip(BaseThumbnailStrip):
+    """可拖拽排序的音频缩略图条"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    def _create_thumbnail(self, node_id, path, index):
+        return DraggableAudioThumbnail(node_id, path, index, self)
+    
+    def _get_thumbnail_widget_class(self):
+        return DraggableAudioThumbnail
+    
+    def get_ordered_audio_paths(self):
+        return [path for _, path in self._ordered_items]
+    
+    def _find_closest_index(self, local_pos):
+        if not self._ordered_items:
+            return 0
+        
+        min_dist = float('inf')
+        target_idx = len(self._ordered_items)
+        
+        for i in range(self._grid_layout.count()):
+            w = self._grid_layout.itemAt(i).widget()
+            if w and isinstance(w, DraggableAudioThumbnail):
+                center = w.geometry().center()
+                dx = local_pos.x() - center.x()
+                dy = local_pos.y() - center.y()
+                dist = dx * dx + dy * dy
+                if dist < min_dist:
+                    min_dist = dist
+                    if local_pos.x() < center.x():
+                        target_idx = w.index
+                    else:
+                        target_idx = w.index + 1
+        return target_idx
