@@ -9,10 +9,10 @@ import time
 class NodeScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 优化：减小初始场景大小，按需动态扩展
-        self._base_size = 2000
-        self._margin = 500  # 边界外扩余量
-        self._expand_threshold = 0.8  # 扩展阈值：当节点占用80%空间时才扩展
+        # 画布默认范围调大，减少一开始就碰到边界的情况
+        self._base_size = 6000
+        self._margin = 1200  # 边界外扩余量
+        self._expand_threshold = 0.55  # 更早扩展，避免拖动时总感觉顶到边界
         self.setSceneRect(-self._base_size // 2, -self._base_size // 2,
                           self._base_size, self._base_size)
         self.nodes = {}
@@ -66,7 +66,7 @@ class NodeScene(QGraphicsScene):
         
         # 扩展场景，确保所有节点都在范围内，并留足余量
         # 使用增量扩展策略：每次扩展50%，而不是一次性扩展到足够大
-        expansion_factor = 1.5
+        expansion_factor = 1.8
         new_width = current.width() * expansion_factor
         new_height = current.height() * expansion_factor
         

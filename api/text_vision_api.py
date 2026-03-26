@@ -1,6 +1,8 @@
 import requests
 import base64
 import time
+import json
+import pprint
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from requests.adapters import HTTPAdapter
@@ -30,8 +32,10 @@ class TextVisionAPI:
         session.mount("http://", adapter)
         return session
     
-    def set_credentials(self, api_key: str, **kwargs):
+    def set_credentials(self, api_key: str, base_url: str = "", **kwargs):
         self.api_key = api_key
+        if base_url and base_url.strip():
+            self._base_url = base_url.strip().rstrip("/")
     
     def test_connection(self, model: str = "gpt-5.4") -> bool:
         """测试API连接是否正常"""
@@ -61,6 +65,7 @@ class TextVisionAPI:
         image_paths: List[str] = None,
         model: str = "gpt-5.4",
         temperature: float = 0.8,
+        format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
         """调用API生成文本
@@ -78,9 +83,9 @@ class TextVisionAPI:
             return None
         
         if model.startswith("gpt"):
-            return self._call_gpt_api(prompt, image_paths, model, temperature, is_stopped)
+            return self._call_gpt_api(prompt, image_paths, model, temperature, format_mode, is_stopped)
         else:
-            return self._call_gemini_api(prompt, image_paths, model, temperature, is_stopped)
+            return self._call_gemini_api(prompt, image_paths, model, temperature, format_mode, is_stopped)
     
     def _call_gpt_api(
         self,
@@ -88,6 +93,7 @@ class TextVisionAPI:
         image_paths: List[str],
         model: str,
         temperature: float = 0.8,
+        format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
         """调用GPT-5.4 API"""
@@ -98,7 +104,9 @@ class TextVisionAPI:
             "Accept": "application/json"
         }
         
-        content = [{"type": "text", "text": prompt}]
+        system_prompt = self._build_system_prompt(format_mode)
+        user_prompt = self._build_user_prompt(prompt, format_mode)
+        content = [{"type": "text", "text": user_prompt}]
         
         if image_paths:
             for img_path in image_paths:
@@ -114,7 +122,7 @@ class TextVisionAPI:
         request_body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content}
             ],
             "max_tokens": 4096,
@@ -131,7 +139,7 @@ class TextVisionAPI:
             
             if resp.status_code == 200:
                 data = resp.json()
-                return self._extract_gpt_text(data)
+                return self._format_response_text(self._extract_gpt_text(data), format_mode)
             else:
                 error_msg = self._safe_get_error_message(resp)
                 raise Exception(f"GPT API错误 (HTTP {resp.status_code}): {error_msg}")
@@ -147,6 +155,7 @@ class TextVisionAPI:
         image_paths: List[str],
         model: str,
         temperature: float = 0.8,
+        format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
         """调用Gemini-3 Flash API"""
@@ -156,7 +165,9 @@ class TextVisionAPI:
             "Content-Type": "application/json"
         }
         
-        parts = [{"text": prompt}]
+        system_prompt = self._build_system_prompt(format_mode)
+        user_prompt = self._build_user_prompt(prompt, format_mode)
+        parts = [{"text": f"{system_prompt}\n\n{user_prompt}"}]
         
         if image_paths:
             for img_path in image_paths:
@@ -173,7 +184,11 @@ class TextVisionAPI:
                     })
         
         request_body = {
-            "contents": [{"role": "user", "parts": parts}]
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": 4096,
+            }
         }
         
         try:
@@ -186,7 +201,7 @@ class TextVisionAPI:
             
             if resp.status_code == 200:
                 data = resp.json()
-                return self._extract_gemini_text(data)
+                return self._format_response_text(self._extract_gemini_text(data), format_mode)
             else:
                 error_msg = self._safe_get_error_message(resp)
                 raise Exception(f"Gemini API错误 (HTTP {resp.status_code}): {error_msg}")
@@ -195,6 +210,94 @@ class TextVisionAPI:
                 requests.exceptions.ConnectionError,
                 requests.exceptions.Timeout) as e:
             raise Exception(f"网络错误: {e}")
+
+    def _build_system_prompt(self, format_mode: str) -> str:
+        if format_mode == "图片反推json":
+            return (
+                "你是专业的图片分析与结构化输出助手。"
+                "你必须严格返回一个合法 JSON 对象，且只输出 JSON，"
+                "不要输出 Markdown、代码块、解释或额外前后缀。"
+                "JSON 必须严格包含以下 8 个键，并尽量按这个顺序输出："
+                "\"主体 + 动作\"、\"场景 + 环境\"、\"视角\"、\"镜头 & 景深\"、"
+                "\"光影\"、\"色彩风格\"、\"画质\"、\"特效\"。"
+                "每个键的值都使用中文字符串；没有明确内容时返回空字符串。"
+            )
+        if format_mode == "json格式":
+            return (
+                "你是结构化输出助手。"
+                "请严格返回合法 JSON，且只输出 JSON，不要输出 Markdown、代码块、说明或额外文本。"
+                "如果用户没有明确指定 JSON 字段结构，请返回一个对象，优先包含："
+                "\"总结\"、\"分析\"、\"细节\" 这三个顶层字段。"
+                "其中 \"分析\" 建议为字符串数组，\"细节\" 建议为对象。"
+            )
+        return "你是专业的图片理解与文本生成助手，请基于图片和提示词直接回答。"
+
+    def _build_user_prompt(self, prompt: str, format_mode: str) -> str:
+        prompt = (prompt or "").strip()
+        if format_mode == "图片反推json":
+            return (
+                "请结合输入图片完成图像反推，并输出结构化结果。\n"
+                "输出要求：\n"
+                "1. 只返回一个合法 JSON 对象。\n"
+                "2. 不要使用 Markdown 或代码块。\n"
+                "3. 8 个字段必须全部存在。\n"
+                f"4. 额外要求：{prompt or '请尽量准确、精炼地概括图片的核心视觉信息。'}"
+            )
+        if format_mode == "json格式":
+            return (
+                "请根据输入图片与用户需求，以 JSON 格式回答。\n"
+                "输出要求：\n"
+                "1. 只返回合法 JSON。\n"
+                "2. 不要使用 Markdown 或代码块。\n"
+                "3. 如果用户指定了字段或结构，优先遵循用户要求。\n"
+                f"用户需求：{prompt or '请对图片内容进行结构化总结。'}"
+            )
+        return prompt
+
+    def _format_response_text(self, text: str, format_mode: str) -> str:
+        cleaned_text = (text or "").strip()
+        if not cleaned_text:
+            return ""
+        if format_mode == "无":
+            return cleaned_text
+
+        parsed_json = self._try_parse_json(cleaned_text)
+        if parsed_json is None:
+            return cleaned_text
+
+        return pprint.pformat(
+            parsed_json,
+            width=100,
+            compact=False,
+            sort_dicts=False,
+        )
+
+    def _try_parse_json(self, text: str):
+        candidate = (text or "").strip()
+        if not candidate:
+            return None
+
+        if candidate.startswith("```"):
+            lines = candidate.splitlines()
+            if len(lines) >= 3:
+                candidate = "\n".join(lines[1:-1]).strip()
+
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(candidate):
+            if char not in "[{":
+                continue
+            snippet = candidate[index:]
+            try:
+                parsed, _ = decoder.raw_decode(snippet)
+                return parsed
+            except Exception:
+                continue
+        return None
     
     def _encode_image(self, image_path: str) -> Optional[str]:
         """将图片文件编码为base64字符串"""

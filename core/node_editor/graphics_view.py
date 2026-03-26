@@ -41,11 +41,13 @@ class GraphicsView(QGraphicsView):
             self.scale(zoom_factor, zoom_factor)
     
     def mousePressEvent(self, event):
-        if event.button() == Qt.MiddleButton:
+        if event.button() in (Qt.MiddleButton, Qt.RightButton):
             self._pan_mode = True
             self.setDragMode(QGraphicsView.ScrollHandDrag)
             self._pan_start = event.pos()
             self.viewport().setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
         elif event.button() == Qt.LeftButton:
             if hasattr(self, 'on_template_place') and self.cursor().shape() == Qt.CrossCursor:
                 pos = self.mapToScene(event.pos())
@@ -56,10 +58,12 @@ class GraphicsView(QGraphicsView):
             super().mousePressEvent(event)
     
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MiddleButton:
+        if event.button() in (Qt.MiddleButton, Qt.RightButton):
             self._pan_mode = False
             self.setDragMode(QGraphicsView.RubberBandDrag)
             self.viewport().setCursor(Qt.ArrowCursor)
+            event.accept()
+            return
         
         if self.dragging_edge and event.button() == Qt.LeftButton:
             self._finish_dragging_edge(event.pos())

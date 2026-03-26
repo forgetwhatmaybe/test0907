@@ -991,21 +991,21 @@ class ExecuteThread(QThread):
             self.video_generated.emit(output_path, output_node.id)
     
     def _execute_text_vision_node(self, node):
-        """执行文本视觉节点：调用 GPT-5.2 或 Gemini-3 进行图片理解"""
+        """执行文本视觉节点：调用 GPT-5.4 或 Gemini-3 进行图片理解"""
         self.progress.emit(f"正在执行: {node.title}")
         
         params = node.get_params()
         prompt = params.get("prompt", "")
-        if not prompt:
+        format_mode = params.get("format_mode", "无")
+        if not prompt and format_mode == "无":
             raise Exception(f"节点 '{node.title}' 没有设置提示词")
         
         image_paths = node.get_ordered_image_paths()
         if image_paths:
             image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths]
         
-        model = params.get("model", "gpt-5.2")
+        model = params.get("model", "gpt-5.4")
         temperature = params.get("temperature", 0.8)
-        
         if model.startswith("gpt"):
             keys = self.config.get_api_keys("gpt52")
             if not keys.get("api_key"):
@@ -1017,7 +1017,7 @@ class ExecuteThread(QThread):
         
         from api.text_vision_api import TextVisionAPI
         api = TextVisionAPI()
-        api.set_credentials(keys["api_key"])
+        api.set_credentials(keys["api_key"], base_url=keys.get("base_url", ""))
         
         self.progress.emit(f"正在调用 {model} 生成文本...")
         
@@ -1027,6 +1027,7 @@ class ExecuteThread(QThread):
                 image_paths=image_paths,
                 model=model,
                 temperature=temperature,
+                format_mode=format_mode,
                 is_stopped=self.isInterruptionRequested
             )
             
@@ -1880,6 +1881,8 @@ class EditorWindow(QMainWindow):
             node.prompt_edit.textChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'model_combo'):
             node.model_combo.currentIndexChanged.connect(self._schedule_auto_save)
+        if hasattr(node, 'format_combo'):
+            node.format_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'style_combo'):
             node.style_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'mode_combo'):
@@ -1892,6 +1895,8 @@ class EditorWindow(QMainWindow):
             node.aspect_ratio_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'cfg_slider'):
             node.cfg_slider.valueChanged.connect(self._schedule_auto_save)
+        if hasattr(node, 'temp_slider'):
+            node.temp_slider.valueChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'name_edit'):
             node.name_edit.editingFinished.connect(self._schedule_auto_save)
         if hasattr(node, 'batch_spin'):

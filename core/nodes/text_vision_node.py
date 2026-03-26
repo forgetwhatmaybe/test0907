@@ -17,6 +17,7 @@ class TextVisionNode(NodeItem):
     支持最多14张参考图片输入。
     """
     node_type = "text_vision"
+    FORMAT_OPTIONS = ["无", "图片反推json", "json格式"]
     
     def __init__(self):
         self.generated_text = ""
@@ -24,6 +25,7 @@ class TextVisionNode(NodeItem):
         self._estimated_tokens = 0
         self._thumbnails_expanded = True
         self._temperature = 0.8
+        self._format_mode = "无"
         
         super().__init__("文本识图")
         self.add_multi_input("参考图片")
@@ -76,6 +78,16 @@ class TextVisionNode(NodeItem):
         ])
         self.model_combo.setStyleSheet(_combo_style)
         layout.addWidget(self.model_combo)
+
+        format_label = QLabel("格式:")
+        format_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(format_label)
+
+        self.format_combo = QComboBox()
+        self.format_combo.addItems(self.FORMAT_OPTIONS)
+        self.format_combo.setCurrentText(self._format_mode)
+        self.format_combo.setStyleSheet(_combo_style)
+        layout.addWidget(self.format_combo)
         
         self.thumb_label = QLabel("参考图片:")
         self.thumb_label.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -215,6 +227,7 @@ class TextVisionNode(NodeItem):
         return {
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
+            "format_mode": self.format_combo.currentText(),
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
             "temperature": self._temperature,
         }
@@ -226,6 +239,7 @@ class TextVisionNode(NodeItem):
         return {
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
+            "format_mode": self.format_combo.currentText(),
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
             "generated_text": self.generated_text,
             "temperature": self._temperature,
@@ -237,6 +251,12 @@ class TextVisionNode(NodeItem):
         model_index = self.model_combo.findText(data.get("model", "gpt-5.4"))
         if model_index >= 0:
             self.model_combo.setCurrentIndex(model_index)
+
+        format_mode = data.get("format_mode", "无")
+        format_index = self.format_combo.findText(format_mode)
+        if format_index >= 0:
+            self.format_combo.setCurrentIndex(format_index)
+        self._format_mode = self.format_combo.currentText()
         
         self._temperature = data.get("temperature", 0.8)
         if hasattr(self, 'temp_slider'):
