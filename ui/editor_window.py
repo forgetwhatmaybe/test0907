@@ -1226,7 +1226,8 @@ class ExecuteThread(QThread):
 
 class EditorWindow(QMainWindow):
     def __init__(self, project_path: str, parent=None):
-        super().__init__(parent)
+        super().__init__()
+        self.main_window = parent
         self.project_path = Path(project_path)
         self.config = Config()
         self.project_manager = ProjectManager(self.config)
@@ -1634,18 +1635,20 @@ class EditorWindow(QMainWindow):
             return []
 
         source_node = source_socket.node
-        if node_type == 'gemini_api' and getattr(source_node, 'node_type', '') == 'image':
+        source_node_type = getattr(source_node, 'node_type', '')
+
+        if node_type in ('gemini_api', 'storyboard', 'text_vision') and source_node_type in ('image', 'output', 'gemini_api', 'image_edit', 'storyboard'):
             selected = [
                 item for item in self.scene.selectedItems()
-                if getattr(item, 'node_type', '') == 'image'
+                if getattr(item, 'node_type', '') == source_node_type
             ]
             if source_node in selected and len(selected) > 1:
                 return sorted(selected, key=lambda item: item.pos().y())
 
-        if node_type == 'output' and getattr(source_node, 'node_type', '') == 'gemini_api':
+        if node_type == 'output' and source_node_type in ('gemini_api', 'storyboard'):
             selected = [
                 item for item in self.scene.selectedItems()
-                if getattr(item, 'node_type', '') == 'gemini_api'
+                if getattr(item, 'node_type', '') == source_node_type
             ]
             if source_node in selected and len(selected) > 1:
                 return sorted(selected, key=lambda item: item.pos().y())
@@ -1833,10 +1836,15 @@ class EditorWindow(QMainWindow):
     
     def _go_back(self):
         self._save_workflow()
-        if self.parent():
-            self.parent().showNormal()  # 恢复主窗口
-            self.parent()._load_projects()
         self.close()
+
+    def _restore_main_window(self):
+        if self.main_window:
+            self.main_window.editor_window = None
+            self.main_window._load_projects()
+            self.main_window.showNormal()
+            self.main_window.raise_()
+            self.main_window.activateWindow()
     
     def _save_undo_state(self):
         state = self.scene.save_to_dict()
@@ -2402,6 +2410,7 @@ class EditorWindow(QMainWindow):
             thread = t.get("thread")
             if thread and thread.isRunning():
                 thread.wait(3000)
+        self._restore_main_window()
         event.accept()
     
     def keyPressEvent(self, event):

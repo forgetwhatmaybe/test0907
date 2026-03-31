@@ -246,6 +246,8 @@ class TextVisionNode(NodeItem):
                         img_path = getattr(src_node, 'video_path', '')
                     elif src_node.node_type == "image_edit":
                         img_path = getattr(src_node, '_result_path', '')
+                    elif src_node.node_type == "storyboard":
+                        img_path = getattr(src_node, '_result_path', '')
                     if img_path and Path(img_path).exists():
                         connected_items.append((src_node.id, img_path))
         

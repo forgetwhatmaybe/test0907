@@ -456,6 +456,7 @@ class GraphicsView(QGraphicsView):
             ("🍌  香蕉生图", "gemini_api"),
             ("🎬  Veo生视频", "veo_api"),
             ("✏  图片修改", "image_edit"),
+            ("🧩  图片分镜", "storyboard"),
             ("📝  文本识图", "text_vision"),
             ("📄  文本显示", "text_display"),
             ("📤  视频(图片)输出", "output"),
@@ -482,16 +483,19 @@ class GraphicsView(QGraphicsView):
         menu_items = []
         if start_type == 'output':
             # 从输出口拖出：可以创建下游节点
-            if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image_edit'):
+            if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image_edit', 'storyboard'):
                 menu_items.append(("📤  视频(图片)输出", "output"))
-            if source_node_type in ('image'):
+            if source_node_type in ('image', 'output', 'image_edit', 'storyboard', 'gemini_api'):
                 menu_items.append(("📝  文本识图", "text_vision"))
-            if source_node_type in ('image', 'gemini_api', 'output', 'image_edit'):
+            if source_node_type in ('image'):
+                menu_items.append(("🧩  图片分镜", "storyboard"))
+            if source_node_type in ('image', 'gemini_api', 'output', 'image_edit', 'storyboard'):
                 # 图片/输出可连到API节点或图片修改节点
 
                 menu_items.append(("🍌  香蕉生图", "gemini_api"))
                 menu_items.append(("🎬  Veo生视频", "veo_api"))
                 menu_items.append(("✏  图片修改", "image_edit"))
+                menu_items.append(("🧩  图片分镜", "storyboard"))
                 menu_items.append(("🎬  可灵生视频", "kling_api"))
                 menu_items.append(("🎥  即梦生视频", "jimeng_api"))
 
@@ -506,7 +510,7 @@ class GraphicsView(QGraphicsView):
                 menu_items.append(("🎬  Veo生视频", "veo_api"))
         else:
             # 从输入口拖出：可以创建上游节点
-            if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image_edit'):
+            if source_node_type in ('kling_api', 'jimeng_api', 'gemini_api', 'veo_api', 'image_edit', 'storyboard'):
                 menu_items.append(("🖼  图片上传", "image"))
                 menu_items.append(("🍌  香蕉生图", "gemini_api"))
                 menu_items.append(("📤  视频(图片)输出", "output"))
@@ -516,12 +520,13 @@ class GraphicsView(QGraphicsView):
                 menu_items.append(("🍌  香蕉生图", "gemini_api"))
                 menu_items.append(("🎬  Veo生视频", "veo_api"))
                 menu_items.append(("✏  图片修改", "image_edit"))
+                menu_items.append(("🧩  图片分镜", "storyboard"))
                 menu_items.append(("🎞  视频上传", "video"))
             # 文本显示节点可连到文本识图
             if source_node_type == 'text_display':
                 menu_items.append(("📝  文本识图", "text_vision"))
             # API节点可连到文本识图
-            if source_node_type in ('gemini_api', 'veo_api'):
+            if source_node_type in ('gemini_api', 'veo_api', 'storyboard'):
                 menu_items.append(("📝  文本识图", "text_vision"))
 
         if not menu_items:
@@ -554,7 +559,15 @@ class GraphicsView(QGraphicsView):
             }
         """)
 
+        deduped_items = []
+        seen_node_types = set()
         for label, node_type in menu_items:
+            if node_type in seen_node_types:
+                continue
+            seen_node_types.add(node_type)
+            deduped_items.append((label, node_type))
+
+        for label, node_type in deduped_items:
             action = QAction(label, menu)
             action.setData(node_type)
             menu.addAction(action)

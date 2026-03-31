@@ -261,6 +261,7 @@ class MainWindow(QMainWindow):
         self.editor_window.show()
         self.editor_window.raise_()
         self.editor_window.activateWindow()
+        self.hide()
         
         def reset_loading():
             if self.current_project_widget:
