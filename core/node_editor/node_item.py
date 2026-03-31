@@ -163,7 +163,7 @@ class NodeItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
         self.setZValue(10)
-        self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
+        self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
         
         self._setup_ui()
     
@@ -303,6 +303,11 @@ class NodeItem(QGraphicsItem):
         if change == QGraphicsItem.ItemPositionHasChanged:
             # 优化：使用批量更新机制，避免频繁更新连线
             self._schedule_edge_updates()
+            scene = self.scene()
+            if scene and hasattr(scene, '_mark_items_rect_dirty'):
+                scene._mark_items_rect_dirty()
+            if scene and hasattr(scene, '_auto_expand_scene'):
+                scene._auto_expand_scene(self.sceneBoundingRect())
         
         # 拦截选中状态变化，在Ctrl+点击全选时阻止Qt的默认toggle行为
         if change == QGraphicsItem.ItemSelectedChange:

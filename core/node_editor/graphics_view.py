@@ -10,6 +10,12 @@ class GraphicsView(QGraphicsView):
         super().__init__(scene, parent)
         self.setRenderHint(QPainter.Antialiasing)
         self.setRenderHint(QPainter.TextAntialiasing)
+        self.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        self.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
+        self.setOptimizationFlags(
+            QGraphicsView.DontSavePainterState |
+            QGraphicsView.DontAdjustForAntialiasing
+        )
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setAcceptDrops(True)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -27,8 +33,14 @@ class GraphicsView(QGraphicsView):
         self.drag_edge = None
         self.drag_start_socket = None
         self._pan_mode = False
+        self._dragging_nodes = False
         self._shift_selection_active = False
         self._shift_selected_before = []
+
+    def _set_drag_performance_mode(self, enabled):
+        self.setRenderHint(QPainter.Antialiasing, not enabled)
+        self.setRenderHint(QPainter.TextAntialiasing, not enabled)
+        self.setRenderHint(QPainter.SmoothPixmapTransform, False)
     
     def wheelEvent(self, event):
         if not (event.modifiers() & Qt.ControlModifier):
@@ -110,6 +122,10 @@ class GraphicsView(QGraphicsView):
                 pos = self.mapToScene(event.pos())
                 self.on_template_place(pos)
                 return
+            clicked_node = self._find_node_item(self.itemAt(event.pos()))
+            self._dragging_nodes = clicked_node is not None
+            if self._dragging_nodes:
+                self._set_drag_performance_mode(True)
             super().mousePressEvent(event)
         else:
             super().mousePressEvent(event)
@@ -126,6 +142,10 @@ class GraphicsView(QGraphicsView):
             self._finish_dragging_edge(event.pos())
         
         super().mouseReleaseEvent(event)
+
+        if event.button() == Qt.LeftButton and self._dragging_nodes:
+            self._dragging_nodes = False
+            self._set_drag_performance_mode(False)
 
         if event.button() == Qt.LeftButton and self._shift_selection_active:
             for item in self._shift_selected_before:

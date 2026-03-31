@@ -9,6 +9,7 @@ import time
 class NodeScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setItemIndexMethod(QGraphicsScene.NoIndex)
         # 画布默认范围调大，减少一开始就碰到边界的情况
         self._base_size = 6000
         self._margin = 1200  # 边界外扩余量
@@ -36,8 +37,11 @@ class NodeScene(QGraphicsScene):
         """标记边界矩形缓存为脏"""
         self._items_rect_dirty = True
     
-    def _auto_expand_scene(self):
-        """根据所有节点的位置自动扩展场景范围（优化版）"""
+    def _auto_expand_scene(self, target_rect=None):
+        """根据节点位置自动扩展场景范围。
+
+        拖动过程中优先使用当前移动节点的范围，避免频繁计算整场景边界。
+        """
         if not self.nodes:
             return
         
@@ -47,21 +51,15 @@ class NodeScene(QGraphicsScene):
             return
         
         current = self.sceneRect()
-        items_rect = self._get_cached_items_rect()
+        items_rect = target_rect if target_rect is not None else self._get_cached_items_rect()
+
+        if items_rect.isNull() or items_rect.isEmpty():
+            return
         
         # 如果所有节点都在当前场景范围内（留有余量），不需要扩展
         padded = current.adjusted(self._margin, self._margin,
                                   -self._margin, -self._margin)
         if padded.contains(items_rect):
-            return
-        
-        # 计算当前使用率，只有超过阈值才扩展
-        current_area = current.width() * current.height()
-        items_area = items_rect.width() * items_rect.height()
-        usage_ratio = items_area / current_area if current_area > 0 else 0
-        
-        if usage_ratio < self._expand_threshold:
-            # 使用率不高，不扩展
             return
         
         # 扩展场景，确保所有节点都在范围内，并留足余量
@@ -79,7 +77,7 @@ class NodeScene(QGraphicsScene):
             new_height
         )
         
-        # 确保所有节点都在新范围内
+        # 确保目标节点（或全部节点）都在新范围内
         new_rect = new_rect.united(items_rect.adjusted(
             -self._margin, -self._margin,
             self._margin, self._margin
