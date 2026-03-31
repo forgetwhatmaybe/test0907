@@ -15,6 +15,8 @@ class GeminiAPI:
     """
     
     BASE_URL = "https://api.vectorengine.ai/v1"
+    REQUEST_RETRY_TOTAL = 10
+    GENERATE_MAX_ATTEMPTS = 10
     
     def __init__(self):
         self.api_key = ""
@@ -25,7 +27,7 @@ class GeminiAPI:
     def _create_retry_session(self):
         session = requests.Session()
         retry = Retry(
-            total=3,
+            total=self.REQUEST_RETRY_TOTAL,
             backoff_factor=2,
             status_forcelist=[500, 502, 503, 504]
         )
@@ -138,7 +140,7 @@ class GeminiAPI:
         print(f"[Gemini] 请求地址: {self._base_url}/models/{model}:generateContent?key=***")
         
         # ---- 发送请求（支持限流自动重试）----
-        max_attempts = 6
+        max_attempts = self.GENERATE_MAX_ATTEMPTS
         for attempt in range(1, max_attempts + 1):
             if is_stopped and is_stopped():
                 return None
@@ -146,7 +148,7 @@ class GeminiAPI:
             try:
                 resp = self._session.post(
                     url, json=request_body,
-                    timeout=(15, 300)  # 连接 15s，读取 300s（图片生成可能较慢）
+                    timeout=(15, 900)  # 连接 15s，读取 900s（4K 图片生成可能较慢）
                 )
                 
                 if resp.status_code == 429:

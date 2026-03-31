@@ -17,7 +17,7 @@ from core.node_editor.graphics_view import GraphicsView
 from core.node_editor.edge import Edge
 from core.nodes.nodes import (
     ImageNode, KlingAPINode, JimengAPINode, GeminiAPINode, 
-    OutputNode, ImageEditNode, VideoNode, VeoAPINode
+    OutputNode, ImageEditNode, VideoNode, VeoAPINode, StoryboardNode
 )
 from core.nodes.text_vision_node import TextVisionNode
 from core.nodes.text_display_node import TextDisplayNode
@@ -29,7 +29,7 @@ from ui.video_player import VideoPlayerDialog
 from ui.task_queue import TaskQueueManager, QueueDialog
 from utils.config import Config
 from utils.project_manager import ProjectManager
-from utils.file_utils import download_file, compress_image_if_needed, convert_video_to_mp4, convert_audio_to_mp3
+from utils.file_utils import download_file, compress_image_if_needed, convert_video_to_mp4, convert_audio_to_mp3, get_file_size_mb
 from api.kling_api import KlingAPI
 from api.jimeng_api import JimengAPI
 from api.gemini_api import GeminiAPI
@@ -45,6 +45,7 @@ NODE_REGISTRY = {
     "veo_api": VeoAPINode,
     "seedance2_api": Seedance2APINode,
     "image_edit": ImageEditNode,
+    "storyboard": StoryboardNode,
     "video": VideoNode,
     "audio": AudioNode,
     "output": OutputNode,
@@ -186,7 +187,7 @@ class ExecuteThread(QThread):
                     self.finished_signal.emit(False, "⬛ 执行已停止")
                     return
                 
-                api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "seedance2_api", "image_edit", "text_vision"}
+                api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "seedance2_api", "image_edit", "storyboard", "text_vision"}
                 if node.node_type not in api_types:
                     continue
                 
@@ -204,6 +205,8 @@ class ExecuteThread(QThread):
                         self._execute_seedance2_node(node)
                     elif node.node_type == "image_edit":
                         self._execute_image_edit_node(node)
+                    elif node.node_type == "storyboard":
+                        self._execute_storyboard_node(node)
                     elif node.node_type == "text_vision":
                         self._execute_text_vision_node(node)
                     
@@ -315,6 +318,8 @@ class ExecuteThread(QThread):
                             img_path = out_path
                     elif src_node.node_type == "image_edit":
                         img_path = getattr(src_node, '_result_path', '')
+                    elif src_node.node_type == "storyboard":
+                        img_path = getattr(src_node, '_result_path', '')
                     
                     if img_path:
                         if i == 0:
@@ -343,6 +348,8 @@ class ExecuteThread(QThread):
                     elif src_node.node_type == "output":
                         img_path = getattr(src_node, 'video_path', '')
                     elif src_node.node_type == "image_edit":
+                        img_path = getattr(src_node, '_result_path', '')
+                    elif src_node.node_type == "storyboard":
                         img_path = getattr(src_node, '_result_path', '')
                     if img_path and Path(img_path).exists():
                         id_to_path[src_node.id] = img_path
@@ -989,6 +996,132 @@ class ExecuteThread(QThread):
             # 直接设置 video_path，供链式执行下游节点读取
             output_node.video_path = output_path
             self.video_generated.emit(output_path, output_node.id)
+
+    def _execute_storyboard_node(self, node):
+        """执行图片分镜节点：图片合成分镜 / 分镜拆解图片"""
+        self.progress.emit(f"正在执行: {node.title}")
+
+        params = node.get_params()
+        rows = max(1, min(9, int(params.get("rows", 2))))
+        cols = max(1, min(9, int(params.get("cols", 2))))
+        mode = params.get("mode", "图片合成分镜")
+
+        try:
+            from PIL import Image
+        except ImportError:
+            raise Exception("请先安装 Pillow 才能使用分镜功能")
+
+        save_dir = self.project_manager.current_project_path / "素材库"
+        save_dir.mkdir(exist_ok=True)
+
+        if mode == "图片合成分镜":
+            image_paths = self._get_gemini_input_images(node)
+            if not image_paths:
+                raise Exception(f"节点 '{node.title}' 没有输入图片")
+
+            max_images = rows * cols
+            image_paths = image_paths[:max_images]
+            self.progress.emit(f"正在合成分镜: {len(image_paths)} 张图 → {rows}×{cols} 4K 图片")
+
+            canvas_w, canvas_h = 3840, 2160
+            gap = max(24, min(96, int(min(canvas_w / max(cols, 1), canvas_h / max(rows, 1)) * 0.08)))
+            border_width = max(4, min(12, gap // 4))
+            cell_w = canvas_w // cols
+            cell_h = canvas_h // rows
+            inner_w = max(1, cell_w - gap * 2)
+            inner_h = max(1, cell_h - gap * 2)
+            image_w = max(1, inner_w - border_width * 2)
+            image_h = max(1, inner_h - border_width * 2)
+            # 白底画布 + 更大的格子间隙；每张图增加黑色边框
+            canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+
+            for index, image_path in enumerate(image_paths):
+                try:
+                    img = Image.open(image_path)
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    elif img.mode == "L":
+                        img = img.convert("RGB")
+
+                    thumb = img.copy()
+                    thumb.thumbnail((image_w, image_h), Image.LANCZOS)
+                    row = index // cols
+                    col = index % cols
+                    cell_x = col * cell_w
+                    cell_y = row * cell_h
+                    frame_x = cell_x + (cell_w - (thumb.width + border_width * 2)) // 2
+                    frame_y = cell_y + (cell_h - (thumb.height + border_width * 2)) // 2
+                    # 先画黑色边框，再贴图片
+                    for bx in range(frame_x, frame_x + thumb.width + border_width * 2):
+                        for by in range(frame_y, frame_y + thumb.height + border_width * 2):
+                            canvas.putpixel((bx, by), (0, 0, 0))
+                    x = frame_x + border_width
+                    y = frame_y + border_width
+                    canvas.paste(thumb, (x, y))
+                except Exception as e:
+                    raise Exception(f"处理图片失败: {Path(image_path).name} - {str(e)}")
+
+            import time as _time
+            result_path = str(save_dir / f"storyboard_merge_{int(_time.time() * 1000)}.png")
+            canvas.save(result_path, "PNG")
+            node._result_path = result_path
+            node._result_paths = [result_path]
+
+            output_nodes = self._get_target_output_nodes(node)
+            for output_node in output_nodes:
+                output_path = str(self._get_output_save_path(output_node, ".png"))
+                shutil.copy2(result_path, output_path)
+                output_node.video_path = output_path
+                self.video_generated.emit(output_path, output_node.id)
+
+            self.progress.emit("✅ 分镜合成完成")
+            return
+
+        images = self._get_input_images(node)
+        image_path = images["first"]
+        if not image_path:
+            raise Exception(f"节点 '{node.title}' 没有输入图片")
+
+        self.progress.emit(f"正在拆解分镜: {rows}×{cols}")
+        source = Image.open(image_path)
+        if source.mode not in ("RGB", "L"):
+            source = source.convert("RGB")
+        elif source.mode == "L":
+            source = source.convert("RGB")
+
+        width, height = source.size
+        result_paths = []
+        import time as _time
+        timestamp = int(_time.time() * 1000)
+        for row in range(rows):
+            for col in range(cols):
+                left = int(round(col * width / cols))
+                top = int(round(row * height / rows))
+                right = int(round((col + 1) * width / cols))
+                bottom = int(round((row + 1) * height / rows))
+                cropped = source.crop((left, top, right, bottom))
+                part_index = row * cols + col + 1
+                part_path = str(save_dir / f"storyboard_split_{timestamp}_{part_index}.png")
+                cropped.save(part_path, "PNG")
+                result_paths.append(part_path)
+
+        node._result_path = result_paths[0] if result_paths else ""
+        node._result_paths = result_paths
+
+        output_nodes = self._get_target_output_nodes(node)
+        for output_node in output_nodes:
+            copied_paths = []
+            for idx, src_path in enumerate(result_paths, start=1):
+                dst_path = str(self.project_manager.current_project_path / f"{output_node.get_output_name()}_{idx}.png")
+                shutil.copy2(src_path, dst_path)
+                copied_paths.append(dst_path)
+
+            if copied_paths:
+                output_node.video_path = copied_paths[0]
+                for dst_path in copied_paths:
+                    self.video_generated.emit(dst_path, output_node.id)
+
+        self.progress.emit(f"✅ 分镜拆解完成，共 {len(result_paths)} 张")
     
     def _execute_text_vision_node(self, node):
         """执行文本视觉节点：调用 GPT-5.4 或 Gemini-3 进行图片理解"""
@@ -1006,6 +1139,7 @@ class ExecuteThread(QThread):
         
         model = params.get("model", "gpt-5.4")
         temperature = params.get("temperature", 0.8)
+        thinking_mode = params.get("thinking_mode", "none" if model.startswith("gpt") else "minimal")
         if model.startswith("gpt"):
             keys = self.config.get_api_keys("gpt52")
             if not keys.get("api_key"):
@@ -1027,6 +1161,7 @@ class ExecuteThread(QThread):
                 image_paths=image_paths,
                 model=model,
                 temperature=temperature,
+                thinking_mode=thinking_mode,
                 format_mode=format_mode,
                 is_stopped=self.isInterruptionRequested
             )
@@ -1326,7 +1461,7 @@ class EditorWindow(QMainWindow):
         
         toolbar.addSeparator()
         
-        execute_action = QAction("▶ 执行", self)
+        execute_action = QAction("▶ 执行选中", self)
         execute_action.triggered.connect(self._execute_selected_or_all)
         toolbar.addAction(execute_action)
         
@@ -1642,7 +1777,7 @@ class EditorWindow(QMainWindow):
             for edge in socket.edges:
                 if edge.start_socket:
                     src_node = edge.start_socket.node
-                    api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "seedance2_api", "image_edit", "text_vision"}
+                    api_types = {"kling_api", "jimeng_api", "gemini_api", "veo_api", "seedance2_api", "image_edit", "storyboard", "text_vision"}
                     if src_node.node_type in api_types:
                         direct_api_node = src_node
                         break
@@ -1824,6 +1959,8 @@ class EditorWindow(QMainWindow):
                         node.set_unique_name(existing_names)
                     if hasattr(node, 'on_execute_requested'):
                         node.on_execute_requested = self._on_node_execute
+                    if hasattr(node, 'on_execute_current_requested'):
+                        node.on_execute_current_requested = self._on_node_execute_current
                     self._connect_node_signals(node)
                     self.scene.add_node(node)
                     id_map[old_id + "_node"] = node
@@ -1881,6 +2018,8 @@ class EditorWindow(QMainWindow):
             node.prompt_edit.textChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'model_combo'):
             node.model_combo.currentIndexChanged.connect(self._schedule_auto_save)
+        if hasattr(node, 'thinking_combo'):
+            node.thinking_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'format_combo'):
             node.format_combo.currentIndexChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'style_combo'):
@@ -1903,6 +2042,10 @@ class EditorWindow(QMainWindow):
             node.batch_spin.valueChanged.connect(self._schedule_auto_save)
         if hasattr(node, 'seed_spin'):
             node.seed_spin.valueChanged.connect(self._schedule_auto_save)
+        if hasattr(node, 'rows_spin'):
+            node.rows_spin.valueChanged.connect(self._schedule_auto_save)
+        if hasattr(node, 'cols_spin'):
+            node.cols_spin.valueChanged.connect(self._schedule_auto_save)
         # ImageEditNode 专有控件
         if hasattr(node, 'sr_resolution_combo'):
             node.sr_resolution_combo.currentIndexChanged.connect(self._schedule_auto_save)
@@ -2030,24 +2173,22 @@ class EditorWindow(QMainWindow):
         return [n for n in all_outputs if n.id not in downstream_ids]
 
     def _execute_selected_or_all(self):
-        """工具栏执行：选中节点中有OutputNode则依次执行它们，否则执行全部"""
+        """工具栏执行：仅执行当前选中的输出或文本显示节点"""
         selected = [item for item in self.scene.selectedItems() if hasattr(item, 'node_type')]
         selected_output_nodes = [n for n in selected if n.node_type == 'output']
+        selected_text_nodes = [n for n in selected if n.node_type == 'text_display']
+
+        if not selected_output_nodes and not selected_text_nodes:
+            QMessageBox.information(self, "提示", "请先选中要执行的输出节点或文本显示节点")
+            return
+
         if selected_output_nodes:
-            # 选中节点中也只执行根节点，避免链的下游被单独重复执行
             root_selected = self._get_root_output_nodes(selected_output_nodes)
             for out_node in root_selected:
                 self._execute_workflow(output_node=out_node)
-        else:
-            # 收集所有 OutputNode，只对链的根节点创建线程
-            # 下游 OutputNode 由根节点的链式执行自动覆盖，避免重复 API 调用和竞争
-            all_outputs = [n for n in self.scene.nodes.values() if n.node_type == 'output']
-            if not all_outputs:
-                QMessageBox.warning(self, "警告", "工作流中没有输出节点")
-                return
-            root_outputs = self._get_root_output_nodes(all_outputs)
-            for out_node in root_outputs:
-                self._execute_workflow(output_node=out_node)
+
+        for text_node in selected_text_nodes:
+            self._execute_current_node(text_node)
 
     def _execute_workflow(self, output_node=None, output_nodes=None):
         """为每个输出节点创建独立任务并提交到队列"""
@@ -2109,6 +2250,9 @@ class EditorWindow(QMainWindow):
                         return "Seedance 2.0"
                     elif src.node_type == "image_edit":
                         mode = getattr(src, 'edit_mode', '图片修改')
+                        return mode
+                    elif src.node_type == "storyboard":
+                        mode = getattr(src, 'process_mode', '图片分镜')
                         return mode
                     elif src.node_type == "text_vision":
                         return "文本识图"

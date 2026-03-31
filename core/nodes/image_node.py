@@ -1,15 +1,19 @@
 ﻿"""图片上传节点"""
 
 from PyQt5.QtWidgets import (
-    QLabel, QVBoxLayout, QPushButton, QMenu, QAction, QApplication
+    QLabel, QVBoxLayout, QPushButton, QMenu, QAction, QApplication, QWidget
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 from pathlib import Path
+import os
+import platform
+import subprocess
 
 from .base_media_node import BaseMediaNode
 from .cache import ThumbnailCache
 from .mask_editor import MaskEditorDialog
+from .widgets import DoubleClickButton
 from . import styles
 
 
@@ -28,14 +32,26 @@ class ImageNode(BaseMediaNode):
     def _setup_content(self):
         layout = QVBoxLayout(self._content_widget)
         layout.setContentsMargins(5, 5, 5, 5)
-        
-        self.image_label = QLabel("点击选择图片")
+
+        self.image_container = QWidget()
+        self.image_container.setFixedSize(180, 100)
+        self.image_container.setStyleSheet(styles.IMAGE_PLACEHOLDER)
+
+        self.image_label = QLabel(self.image_container)
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setFixedSize(180, 100)
+        self.image_label.setGeometry(2, 2, 176, 96)
         self.image_label.setStyleSheet(styles.IMAGE_PLACEHOLDER)
-        self.image_label.setCursor(Qt.PointingHandCursor)
-        self.image_label.mousePressEvent = lambda e: self._select_image()
-        layout.addWidget(self.image_label)
+
+        self.preview_btn = DoubleClickButton(self.image_container)
+        self.preview_btn.setGeometry(2, 2, 176, 96)
+        self.preview_btn.setStyleSheet("background: transparent; border: none;")
+        self.preview_btn.setCursor(Qt.PointingHandCursor)
+        self.preview_btn.clicked.connect(self._handle_preview_clicked)
+        self.preview_btn.doubleClicked.connect(self._handle_preview_clicked)
+        self.preview_btn.raise_()
+
+        self._reset_image_placeholder()
+        layout.addWidget(self.image_container)
         
         self.select_btn = QPushButton("选择图片")
         self.select_btn.setStyleSheet(styles.BUTTON)
@@ -47,6 +63,37 @@ class ImageNode(BaseMediaNode):
         self.image_path = self.copy_to_material_library(file_path)
         self._update_image_display()
         self._notify_downstream_thumbnail_refresh()
+
+    def _handle_preview_clicked(self):
+        """点击预览图：有图片则系统打开，否则选择图片"""
+        if self.image_path and Path(self.image_path).exists():
+            self._open_with_system_viewer()
+            return
+        self._select_image()
+
+    def _reset_image_placeholder(self):
+        """恢复默认占位样式"""
+        self.image_label.clear()
+        self.image_label.setText("点击选择图片")
+        self.image_label.setStyleSheet(styles.IMAGE_PLACEHOLDER)
+        self.preview_btn.set_file_path("")
+
+    def _open_with_system_viewer(self):
+        """用系统默认图片查看器打开当前图片"""
+        if not self.image_path or not Path(self.image_path).exists():
+            return
+
+        file_path = Path(self.image_path).resolve()
+        system = platform.system()
+        try:
+            if system == "Windows":
+                os.startfile(str(file_path))
+            elif system == "Darwin":
+                subprocess.run(["open", str(file_path)])
+            else:
+                subprocess.run(["xdg-open", str(file_path)])
+        except Exception as e:
+            print(f"打开图片失败: {e}")
 
     def _select_image(self):
         file_path = self.create_file_dialog("选择图片", "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)")
@@ -76,11 +123,13 @@ class ImageNode(BaseMediaNode):
                         font-size: 12px;
                     }
                 """)
+                self.preview_btn.set_file_path("")
                 return
             pixmap = ThumbnailCache.get(self.image_path, 176, 96)
             if pixmap and not pixmap.isNull():
                 self.image_label.setPixmap(pixmap)
                 self.image_label.setStyleSheet(styles.IMAGE_LOADED)
+                self.preview_btn.set_file_path(self.image_path)
             else:
                 self.image_label.clear()
                 self.image_label.setText("⚠ 图片加载失败")
@@ -93,6 +142,9 @@ class ImageNode(BaseMediaNode):
                         font-size: 12px;
                     }
                 """)
+                self.preview_btn.set_file_path("")
+        else:
+            self._reset_image_placeholder()
     
     def serialize_data(self):
         return {

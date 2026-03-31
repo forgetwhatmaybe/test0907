@@ -10,7 +10,7 @@ from urllib3.util.retry import Retry
 
 
 class TextVisionAPI:
-    """文本视觉API封装 - 支持GPT-5.4和Gemini-3.1 Flash Lite Preview
+    """文本视觉API封装 - 支持GPT-5.4和Gemini-3.1 Pro Preview
     
     用于图片理解和文本生成，支持多图片输入。
     """
@@ -65,6 +65,7 @@ class TextVisionAPI:
         image_paths: List[str] = None,
         model: str = "gpt-5.4",
         temperature: float = 0.8,
+        thinking_mode: str = "none",
         format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
@@ -83,9 +84,9 @@ class TextVisionAPI:
             return None
         
         if model.startswith("gpt"):
-            return self._call_gpt_api(prompt, image_paths, model, temperature, format_mode, is_stopped)
+            return self._call_gpt_api(prompt, image_paths, model, temperature, thinking_mode, format_mode, is_stopped)
         else:
-            return self._call_gemini_api(prompt, image_paths, model, temperature, format_mode, is_stopped)
+            return self._call_gemini_api(prompt, image_paths, model, temperature, thinking_mode, format_mode, is_stopped)
     
     def _call_gpt_api(
         self,
@@ -93,6 +94,7 @@ class TextVisionAPI:
         image_paths: List[str],
         model: str,
         temperature: float = 0.8,
+        thinking_mode: str = "none",
         format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
@@ -126,8 +128,10 @@ class TextVisionAPI:
                 {"role": "user", "content": content}
             ],
             "max_tokens": 4096,
-            "temperature": temperature
+            "reasoning_effort": thinking_mode or "none"
         }
+        if (thinking_mode or "none") == "none":
+            request_body["temperature"] = temperature
         
         try:
             resp = self._session.post(
@@ -155,6 +159,7 @@ class TextVisionAPI:
         image_paths: List[str],
         model: str,
         temperature: float = 0.8,
+        thinking_mode: str = "minimal",
         format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
@@ -185,6 +190,7 @@ class TextVisionAPI:
         
         request_body = {
             "contents": [{"role": "user", "parts": parts}],
+            "thinking-level": thinking_mode or "minimal",
             "generationConfig": {
                 "temperature": temperature,
                 "maxOutputTokens": 4096,

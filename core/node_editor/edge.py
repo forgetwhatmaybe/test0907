@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QGraphicsPathItem
+from PyQt5.QtWidgets import QGraphicsPathItem, QStyle
 from PyQt5.QtCore import Qt, QPointF
 from PyQt5.QtGui import QPen, QColor, QPainterPath
 
@@ -70,6 +70,10 @@ class Edge(QGraphicsPathItem):
     def set_end_pos(self, pos):
         self.end_pos = pos
         self.update_position()
+
+    def paint(self, painter, option, widget=None):
+        option.state &= ~QStyle.State_Selected
+        super().paint(painter, option, widget)
     
     def remove(self):
         if self.start_socket:

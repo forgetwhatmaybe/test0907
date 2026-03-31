@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import (
-    QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QComboBox, QSlider
+    QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QComboBox, QSlider, QWidget
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
@@ -13,11 +13,13 @@ from core.nodes import styles
 class TextVisionNode(NodeItem):
     """文本视觉节点 - 支持多图片输入和文本输出
     
-    使用GPT-5.4或Gemini-3 Flash进行图片理解和文本生成。
+    使用GPT-5.4或Gemini-3.1 Pro进行图片理解和文本生成。
     支持最多14张参考图片输入。
     """
     node_type = "text_vision"
     FORMAT_OPTIONS = ["无", "图片反推json", "json格式"]
+    GPT_THINKING_OPTIONS = ["none", "low", "medium", "high", "xhigh"]
+    GEMINI_THINKING_OPTIONS = ["minimal", "low", "medium", "high"]
     
     def __init__(self):
         self.generated_text = ""
@@ -26,6 +28,7 @@ class TextVisionNode(NodeItem):
         self._thumbnails_expanded = True
         self._temperature = 0.8
         self._format_mode = "无"
+        self._thinking_mode = "none"
         
         super().__init__("文本识图")
         self.add_multi_input("参考图片")
@@ -74,10 +77,20 @@ class TextVisionNode(NodeItem):
         self.model_combo = QComboBox()
         self.model_combo.addItems([
             "gpt-5.4",
-            "gemini-3.1-flash-lite-preview",
+            "gemini-3.1-pro-preview",
         ])
         self.model_combo.setStyleSheet(_combo_style)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         layout.addWidget(self.model_combo)
+
+        thinking_label = QLabel("思考模式:")
+        thinking_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(thinking_label)
+
+        self.thinking_combo = QComboBox()
+        self.thinking_combo.setStyleSheet(_combo_style)
+        self.thinking_combo.currentIndexChanged.connect(self._on_thinking_mode_changed)
+        layout.addWidget(self.thinking_combo)
 
         format_label = QLabel("格式:")
         format_label.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -104,7 +117,7 @@ class TextVisionNode(NodeItem):
         
         self.prompt_edit = QTextEdit()
         self.prompt_edit.setPlaceholderText("描述图片内容或提出问题...")
-        self.prompt_edit.setMinimumHeight(60)
+        self.prompt_edit.setFixedHeight(80)
         self.prompt_edit.textChanged.connect(self._on_prompt_changed)
         self.prompt_edit.setStyleSheet("""
             QTextEdit {
@@ -113,15 +126,34 @@ class TextVisionNode(NodeItem):
                 border: 1px solid #444;
                 border-radius: 3px;
                 padding: 3px;
-                min-height: 60px;
+            }
+            QScrollBar:vertical {
+                background: #2a2a2a;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #666;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
         layout.addWidget(self.prompt_edit)
         
-        temp_layout = QHBoxLayout()
-        temp_label = QLabel("温度:")
-        temp_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        temp_layout.addWidget(temp_label)
+        self.temp_widget = QWidget()
+        temp_layout = QHBoxLayout(self.temp_widget)
+        temp_layout.setContentsMargins(0, 0, 0, 0)
+        temp_layout.setSpacing(6)
+
+        self.temp_label = QLabel("温度:")
+        self.temp_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        temp_layout.addWidget(self.temp_label)
         
         self.temp_slider = QSlider(Qt.Horizontal)
         self.temp_slider.setRange(0, 200)
@@ -141,7 +173,7 @@ class TextVisionNode(NodeItem):
         self.temp_value_label = QLabel(f"{self._temperature:.1f}")
         self.temp_value_label.setStyleSheet("color: #aaa; font-size: 11px; min-width: 30px;")
         temp_layout.addWidget(self.temp_value_label)
-        layout.addLayout(temp_layout)
+        layout.addWidget(self.temp_widget)
         
         token_layout = QHBoxLayout()
         self.token_label = QLabel("预估Token: 0")
@@ -149,19 +181,52 @@ class TextVisionNode(NodeItem):
         token_layout.addWidget(self.token_label)
         token_layout.addStretch()
         layout.addLayout(token_layout)
+
+        self._update_thinking_options(self.model_combo.currentText(), preserve_current=False)
+        self._update_temperature_state()
     
     def _on_temp_changed(self, value):
         self._temperature = value / 100.0
         self.temp_value_label.setText(f"{self._temperature:.1f}")
+
+    def _is_gpt_model(self):
+        return self.model_combo.currentText().startswith("gpt")
+
+    def _update_thinking_options(self, model, preserve_current=True):
+        options = self.GPT_THINKING_OPTIONS if model.startswith("gpt") else self.GEMINI_THINKING_OPTIONS
+        current_mode = self._thinking_mode if preserve_current else None
+
+        self.thinking_combo.blockSignals(True)
+        self.thinking_combo.clear()
+        self.thinking_combo.addItems(options)
+
+        if current_mode in options:
+            target_mode = current_mode
+        else:
+            target_mode = "none" if model.startswith("gpt") else "minimal"
+
+        self._thinking_mode = target_mode
+        self.thinking_combo.setCurrentText(target_mode)
+        self.thinking_combo.blockSignals(False)
+
+    def _update_temperature_state(self):
+        temp_visible = (not self._is_gpt_model()) or self._thinking_mode == "none"
+        self.temp_widget.setVisible(temp_visible)
+        self.temp_slider.setEnabled(temp_visible)
+        self.temp_label.setEnabled(temp_visible)
+        self.temp_value_label.setEnabled(temp_visible)
+        self._update_size()
+
+    def _on_model_changed(self):
+        self._update_thinking_options(self.model_combo.currentText())
+        self._update_temperature_state()
+
+    def _on_thinking_mode_changed(self):
+        self._thinking_mode = self.thinking_combo.currentText()
+        self._update_temperature_state()
     
     def _on_prompt_changed(self):
-        doc = self.prompt_edit.document()
-        text_width = self.prompt_edit.width() - 10 if self.prompt_edit.width() > 10 else 195
-        doc.setTextWidth(text_width)
-        new_height = int(doc.size().height()) + 10
-        self.prompt_edit.setMinimumHeight(max(60, new_height))
         self._update_token_estimate()
-        self._update_size()
     
     def _on_edge_changed(self, edge=None):
         QTimer.singleShot(0, self._refresh_thumbnails)
@@ -228,6 +293,7 @@ class TextVisionNode(NodeItem):
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
             "format_mode": self.format_combo.currentText(),
+            "thinking_mode": self.thinking_combo.currentText(),
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
             "temperature": self._temperature,
         }
@@ -240,6 +306,7 @@ class TextVisionNode(NodeItem):
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
             "format_mode": self.format_combo.currentText(),
+            "thinking_mode": self.thinking_combo.currentText(),
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
             "generated_text": self.generated_text,
             "temperature": self._temperature,
@@ -248,9 +315,18 @@ class TextVisionNode(NodeItem):
     def deserialize_data(self, data):
         self.prompt_edit.setPlainText(data.get("prompt", ""))
         
-        model_index = self.model_combo.findText(data.get("model", "gpt-5.4"))
+        model_text = data.get("model", "gpt-5.4")
+        if model_text == "gemini-3.1-flash-lite-preview":
+            model_text = "gemini-3.1-pro-preview"
+        model_index = self.model_combo.findText(model_text)
         if model_index >= 0:
             self.model_combo.setCurrentIndex(model_index)
+        self._update_thinking_options(self.model_combo.currentText(), preserve_current=False)
+
+        thinking_mode = data.get("thinking_mode")
+        if thinking_mode in self.GPT_THINKING_OPTIONS + self.GEMINI_THINKING_OPTIONS:
+            self._thinking_mode = thinking_mode
+            self._update_thinking_options(self.model_combo.currentText())
 
         format_mode = data.get("format_mode", "无")
         format_index = self.format_combo.findText(format_mode)
@@ -262,6 +338,7 @@ class TextVisionNode(NodeItem):
         if hasattr(self, 'temp_slider'):
             self.temp_slider.setValue(int(self._temperature * 100))
             self.temp_value_label.setText(f"{self._temperature:.1f}")
+            self._update_temperature_state()
         
         self.generated_text = data.get("generated_text", "")
         self._image_order = data.get("image_order", [])

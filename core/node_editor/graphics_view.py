@@ -27,8 +27,15 @@ class GraphicsView(QGraphicsView):
         self.drag_edge = None
         self.drag_start_socket = None
         self._pan_mode = False
+        self._shift_selection_active = False
+        self._shift_selected_before = []
     
     def wheelEvent(self, event):
+        if not (event.modifiers() & Qt.ControlModifier):
+            if self._scroll_selected_prompt(event):
+                event.accept()
+                return
+
         zoom_factor = 1.15
         
         if event.angleDelta().y() < 0:
@@ -39,6 +46,53 @@ class GraphicsView(QGraphicsView):
         if self._zoom_min <= new_zoom <= self._zoom_max:
             self._zoom = new_zoom
             self.scale(zoom_factor, zoom_factor)
+            event.accept()
+            return
+
+        event.ignore()
+
+    def _scroll_selected_prompt(self, event):
+        node = self._get_selected_prompt_node(event.pos())
+        if not node:
+            return False
+
+        prompt_edit = getattr(node, 'prompt_edit', None)
+        if prompt_edit is None:
+            return False
+
+        scrollbar = prompt_edit.verticalScrollBar()
+        if scrollbar is None:
+            return False
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return False
+
+        step = max(scrollbar.singleStep(), 20)
+        scroll_steps = max(1, abs(delta) // 120)
+        scrollbar.setValue(scrollbar.value() - (step * scroll_steps if delta > 0 else -step * scroll_steps))
+        return True
+
+    def _get_selected_prompt_node(self, view_pos):
+        hovered_node = self._find_node_item(self.itemAt(view_pos))
+        if hovered_node and hovered_node.isSelected() and hasattr(hovered_node, 'prompt_edit'):
+            return hovered_node
+
+        selected_prompt_nodes = [
+            item for item in self.scene().selectedItems()
+            if hasattr(item, 'prompt_edit')
+        ]
+        if len(selected_prompt_nodes) == 1:
+            return selected_prompt_nodes[0]
+        return None
+
+    def _find_node_item(self, item):
+        current = item
+        while current is not None:
+            if hasattr(current, 'node_type'):
+                return current
+            current = current.parentItem()
+        return None
     
     def mousePressEvent(self, event):
         if event.button() in (Qt.MiddleButton, Qt.RightButton):
@@ -49,6 +103,9 @@ class GraphicsView(QGraphicsView):
             event.accept()
             return
         elif event.button() == Qt.LeftButton:
+            if event.modifiers() & Qt.ShiftModifier:
+                self._shift_selection_active = True
+                self._shift_selected_before = list(self.scene().selectedItems())
             if hasattr(self, 'on_template_place') and self.cursor().shape() == Qt.CrossCursor:
                 pos = self.mapToScene(event.pos())
                 self.on_template_place(pos)
@@ -69,6 +126,13 @@ class GraphicsView(QGraphicsView):
             self._finish_dragging_edge(event.pos())
         
         super().mouseReleaseEvent(event)
+
+        if event.button() == Qt.LeftButton and self._shift_selection_active:
+            for item in self._shift_selected_before:
+                if item.scene() is self.scene():
+                    item.setSelected(True)
+            self._shift_selection_active = False
+            self._shift_selected_before = []
         
         # 节点拖拽结束后自动扩展场景
         if event.button() == Qt.LeftButton:
@@ -165,7 +229,118 @@ class GraphicsView(QGraphicsView):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete:
             self.delete_selected_items()
+            event.accept()
+            return
+
+        if event.modifiers() == Qt.NoModifier and event.key() in (
+            Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right
+        ):
+            if self._move_selected_nodes_toward(event.key()):
+                event.accept()
+                return
+
         super().keyPressEvent(event)
+
+    def _move_selected_nodes_toward(self, key):
+        """按方向键让选中节点向该方向逐步靠拢。
+
+        多选时，目标方向最外侧的节点保持不动，其余节点按网格步长向该方向移动；
+        单选时按普通方向键步进移动。
+        """
+        scene = self.scene()
+        if scene is None:
+            return False
+
+        selected_nodes = [
+            item for item in scene.selectedItems()
+            if hasattr(item, 'node_type')
+        ]
+        if not selected_nodes:
+            return False
+
+        step = max(1, getattr(scene, '_grid_size', 20))
+        geometry = {
+            node: {
+                'x': node.x(),
+                'y': node.y(),
+                'left': node.x(),
+                'top': node.y(),
+                'right': node.x() + node.width,
+                'bottom': node.y() + node.height,
+                'width': node.width,
+                'height': node.height,
+            }
+            for node in selected_nodes
+        }
+
+        def is_vertically_packed(nodes):
+            if len(nodes) <= 1:
+                return True
+            ordered_nodes = sorted(nodes, key=lambda node: (geometry[node]['top'], geometry[node]['left']))
+            previous_bottom = geometry[ordered_nodes[0]]['bottom']
+            for node in ordered_nodes[1:]:
+                if abs(geometry[node]['top'] - previous_bottom) > 0.1:
+                    return False
+                previous_bottom = geometry[node]['bottom']
+            return True
+
+        if key == Qt.Key_Up:
+            if len(selected_nodes) == 1:
+                selected_nodes[0].setPos(selected_nodes[0].x(), selected_nodes[0].y() - step)
+            else:
+                if is_vertically_packed(selected_nodes):
+                    for node in selected_nodes:
+                        node.setPos(geometry[node]['x'], geometry[node]['y'] - step)
+                else:
+                    ordered = sorted(selected_nodes, key=lambda node: (geometry[node]['top'], geometry[node]['left']))
+                    previous_bottom = geometry[ordered[0]]['bottom']
+                    for node in ordered[1:]:
+                        target_y = max(previous_bottom, geometry[node]['top'] - step)
+                        node.setPos(geometry[node]['x'], target_y)
+                        previous_bottom = target_y + geometry[node]['height']
+
+        elif key == Qt.Key_Down:
+            if len(selected_nodes) == 1:
+                selected_nodes[0].setPos(selected_nodes[0].x(), selected_nodes[0].y() + step)
+            else:
+                if is_vertically_packed(selected_nodes):
+                    for node in selected_nodes:
+                        node.setPos(geometry[node]['x'], geometry[node]['y'] + step)
+                else:
+                    ordered = sorted(selected_nodes, key=lambda node: (geometry[node]['bottom'], geometry[node]['left']), reverse=True)
+                    previous_top = geometry[ordered[0]]['top']
+                    for node in ordered[1:]:
+                        target_y = min(previous_top - geometry[node]['height'], geometry[node]['top'] + step)
+                        node.setPos(geometry[node]['x'], target_y)
+                        previous_top = target_y
+
+        elif key == Qt.Key_Left:
+            if len(selected_nodes) == 1:
+                selected_nodes[0].setPos(selected_nodes[0].x() - step, selected_nodes[0].y())
+            else:
+                ordered = sorted(selected_nodes, key=lambda node: (geometry[node]['left'], geometry[node]['top']))
+                anchor_left = geometry[ordered[0]]['left']
+                for node in ordered[1:]:
+                    target_x = max(anchor_left, geometry[node]['left'] - step)
+                    node.setPos(target_x, geometry[node]['y'])
+
+        elif key == Qt.Key_Right:
+            if len(selected_nodes) == 1:
+                selected_nodes[0].setPos(selected_nodes[0].x() + step, selected_nodes[0].y())
+            else:
+                ordered = sorted(selected_nodes, key=lambda node: (geometry[node]['right'], geometry[node]['top']), reverse=True)
+                anchor_left = geometry[ordered[0]]['left']
+                for node in ordered[1:]:
+                    target_x = min(anchor_left, geometry[node]['left'] + step)
+                    node.setPos(target_x, geometry[node]['y'])
+        else:
+            return False
+
+        if hasattr(scene, '_mark_items_rect_dirty'):
+            scene._mark_items_rect_dirty()
+        if hasattr(scene, '_auto_expand_scene'):
+            scene._auto_expand_scene()
+        return True
     
     def delete_selected_items(self):
         scene = self.scene()

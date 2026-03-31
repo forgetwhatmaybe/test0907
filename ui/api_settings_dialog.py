@@ -775,7 +775,7 @@ class APISettingsDialog(QDialog):
         api.set_credentials(api_key)
         
         self._show_testing_dialog()
-        self.test_thread = TestConnectionThread(api, "🔮 Gemini", model="gemini-3.1-flash-lite-preview")
+        self.test_thread = TestConnectionThread(api, "🔮 Gemini", model="gemini-3.1-pro-preview")
         self.test_thread.finished_signal.connect(self._on_test_finished)
         self.test_thread.start()
     

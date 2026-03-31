@@ -439,10 +439,20 @@ class ImageNode(NodeItem):
     def _setup_content(self):
         layout = QVBoxLayout(self._content_widget)
         layout.setContentsMargins(5, 5, 5, 5)
-        
-        self.image_label = QLabel("点击选择图片")
+
+        self.image_container = QWidget()
+        self.image_container.setFixedSize(180, 100)
+        self.image_container.setStyleSheet("""
+            QWidget {
+                background-color: #2a2a2a;
+                border: 2px dashed #555;
+                border-radius: 5px;
+            }
+        """)
+
+        self.image_label = QLabel(self.image_container)
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setFixedSize(180, 100)
+        self.image_label.setGeometry(2, 2, 176, 96)
         self.image_label.setStyleSheet("""
             QLabel {
                 background-color: #2a2a2a;
@@ -451,9 +461,17 @@ class ImageNode(NodeItem):
                 color: #888;
             }
         """)
-        self.image_label.setCursor(Qt.PointingHandCursor)
-        self.image_label.mousePressEvent = lambda e: self._select_image()
-        layout.addWidget(self.image_label)
+
+        self.preview_btn = DoubleClickButton(self.image_container)
+        self.preview_btn.setGeometry(2, 2, 176, 96)
+        self.preview_btn.setStyleSheet("background: transparent; border: none;")
+        self.preview_btn.setCursor(Qt.PointingHandCursor)
+        self.preview_btn.clicked.connect(self._handle_preview_clicked)
+        self.preview_btn.doubleClicked.connect(self._handle_preview_clicked)
+        self.preview_btn.raise_()
+
+        self._reset_image_placeholder()
+        layout.addWidget(self.image_container)
         
         self.select_btn = QPushButton("选择图片")
         self.select_btn.setStyleSheet("""
@@ -491,6 +509,46 @@ class ImageNode(NodeItem):
         self._update_image_display()
         self._notify_downstream_thumbnail_refresh()
 
+    def _handle_preview_clicked(self):
+        """点击预览：有图时打开系统查看器，否则选择图片"""
+        if self.image_path and Path(self.image_path).exists():
+            self._open_with_system_viewer()
+            return
+        self._select_image()
+
+    def _reset_image_placeholder(self):
+        """恢复默认占位态"""
+        self.image_label.clear()
+        self.image_label.setText("点击选择图片")
+        self.image_label.setStyleSheet("""
+            QLabel {
+                background-color: #2a2a2a;
+                border: 2px dashed #555;
+                border-radius: 5px;
+                color: #888;
+            }
+        """)
+        self.preview_btn.set_file_path("")
+
+    def _open_with_system_viewer(self):
+        """使用系统默认图片查看器打开当前图片"""
+        if not self.image_path or not Path(self.image_path).exists():
+            return
+
+        file_path = Path(self.image_path).resolve()
+        try:
+            import subprocess
+            import platform
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(str(file_path))
+            elif system == "Darwin":
+                subprocess.run(["open", str(file_path)])
+            else:
+                subprocess.run(["xdg-open", str(file_path)])
+        except Exception as e:
+            print(f"打开图片失败: {e}")
+
     def _select_image(self):
         file_path, _ = QFileDialog.getOpenFileName(
             None, "选择图片", "",
@@ -523,6 +581,7 @@ class ImageNode(NodeItem):
                         font-size: 12px;
                     }
                 """)
+                self.preview_btn.set_file_path("")
                 return
             pixmap = ThumbnailCache.get(self.image_path, 176, 96)
             if pixmap and not pixmap.isNull():
@@ -534,6 +593,7 @@ class ImageNode(NodeItem):
                         border-radius: 5px;
                     }
                 """)
+                self.preview_btn.set_file_path(self.image_path)
             else:
                 self.image_label.clear()
                 self.image_label.setText("⚠ 图片加载失败")
@@ -546,6 +606,9 @@ class ImageNode(NodeItem):
                         font-size: 12px;
                     }
                 """)
+                self.preview_btn.set_file_path("")
+        else:
+            self._reset_image_placeholder()
     
     def serialize_data(self):
         return {
@@ -1394,10 +1457,144 @@ class GeminiAPINode(NodeItem):
     支持动态文本输入口，接收文本节点的输出。
     """
     node_type = "gemini_api"
-    STYLE_OPTIONS = ["无", "简易草图转分镜", "图片转分镜"]
+    STYLE_OPTIONS = ["无", "简笔画生图", "简易草图转分镜", "图片转分镜"]
     STYLE_PROMPTS = {
         "简易草图转分镜": "将分镜草图完善为手绘风格分镜,黑白风格,线条清晰",
         "图片转分镜": "去除画面中的色彩，将图片转化成手绘风格的分镜图片,黑白风格,线条清晰",
+        "简笔画生图": """浅灰底
+先铺一个非常浅的灰底，不用纯白画布。
+这样线条和高光都更容易控制。
+
+粗透视草图
+用比较淡的线：
+- 定房间边界
+- 定窗户位置
+- 定床、柜子、沙发、地砖
+- 定人物站位
+
+结构线整理
+换一支稍深的笔，把重要边缘提出来：
+- 床轮廓
+- 地砖透视
+- 柜体边缘
+- 窗框
+- 人物外轮廓
+
+铺大灰面
+按体块铺：
+- 墙
+- 地
+- 家具
+- 床
+- 人物
+
+压阴影
+加上：
+- 家具底部阴影
+- 人物投影或接触阴影
+- 柜子内侧暗部
+- 床侧面暗部
+
+拉亮光
+在窗边、地面、床边、墙面刷出光束。
+必要时用橡皮擦出亮面。
+
+最后补节奏线
+在重要地方补几根线：
+- 布褶
+- 家具转角
+- 人物衣服
+- 地砖缝
+
+这一步能让画面活起来。
+
+线不要画满
+不要每个边缘都勾死。
+很多地方点到为止才高级。
+
+比如：
+- 床单轮廓可以断
+- 柜子边缘可以省
+- 地砖不需要每条都一样重
+
+先画：
+- 房间
+- 家具大体块
+- 光影大关系
+
+最后才是：
+- 相框
+- 台灯
+- 杯子
+- 布褶
+
+如果一开始就画小物件，画面会碎。
+
+亮部少画，暗部多概括
+亮的区域尽量干净，少线少纹理。
+暗的区域可以适当加线，帮助体积成立。
+
+这张图就是这样：
+- 窗边亮区几乎很简洁
+- 人物、床边、柜子暗面线更多
+
+笔触方向要跟结构走
+比如：
+- 地砖线是透视方向
+- 床单褶皱顺着布面走
+- 光束顺着入光方向斜切
+- 柜体阴影顺着面铺
+
+笔刷：
+在线稿阶段建议：
+- 笔刷：铅笔/干墨线
+- 不透明度：70%~100%
+- 流量：中等
+- 压感：开
+- 平滑：低到中
+
+目的是保留手绘感，不要太机械。
+
+在铺灰阶段建议：
+- 大圆刷或带纹理平头刷
+- 不透明度：20%~60%
+- 叠加铺色
+- 必要时用套索工具快速切面
+
+在光影阶段建议：
+- 大软刷画氛围光
+- 硬边刷画结构阴影
+- 橡皮擦提亮高光
+
+这个组合最接近图里的效果。
+
+取舍明确
+该画的：
+- 空间透视
+- 光
+- 焦点人物
+
+不该画的：
+- 沙发材质细节
+- 台灯花纹
+- 柜门结构复杂细节
+
+黑白灰关系干净
+没有乱脏灰。
+每个面都比较清楚地属于某个明度组。
+
+有镜头设计
+不是普通室内速写，而像一个故事发生前的静止镜头。
+
+节奏感好
+- 前景大床厚重
+- 中景人物与柜台
+- 后景窗户和光
+- 左侧家具平衡右侧人物
+
+根据上面类似的参考要求，将分镜草图完善为手绘风格分镜，根据主体，边缘有不同粗细的描边，边缘描边有铅笔感觉，边缘有些弯曲的人工感觉，如果是布料衣服这种，袖子、腿边缘都会有曲度的变化，不是直线。人如果是中近景，会把五官画出来，分镜草图没有人的轮廓不要多加人，不要有表示明暗的粗粗的线条，只要有明暗块，多一些明暗块的变化。背景、衣服等，背景的远近明暗块深度也不同，衣服的褶皱凹凸也会导致明暗块不同的深浅，还有些地方的阴影会更深一些，随性的深浅。明暗块有些有渐变，有些没有，线只有边缘线和褶皱线。
+
+将简笔画完善。保留原始构图和姿势。""",
     }
     
     def __init__(self):
@@ -2151,6 +2348,179 @@ class ImageEditNode(NodeItem):
             self.sr_resolution_combo.setCurrentIndex(sr_res_idx)
         self.sr_scale_slider.setValue(data.get("sr_scale", 50))
         self.inpaint_seed_spin.setValue(data.get("inpaint_seed", 101))
+
+
+class StoryboardNode(NodeItem):
+    """图片分镜处理：图片合成分镜 / 分镜拆解图片"""
+    node_type = "storyboard"
+
+    MODES = ["图片合成分镜", "分镜拆解图片"]
+
+    def __init__(self):
+        self.process_mode = "图片合成分镜"
+        self._mode_initialized = False
+        self._image_order = []
+        self._result_path = ""
+        self._result_paths = []
+        super().__init__("图片分镜")
+        self._mode_initialized = True
+        self._setup_sockets()
+        self._update_size()
+
+    def _setup_sockets(self):
+        first_input_edges = []
+        if self.inputs:
+            for edge in self.inputs[0].edges[:]:
+                first_input_edges.append(edge.start_socket)
+
+        for socket in self.inputs[:]:
+            for edge in socket.edges[:]:
+                edge.remove()
+            socket.setParentItem(None)
+            if socket.scene():
+                socket.scene().removeItem(socket)
+        self.inputs.clear()
+
+        if self.process_mode == "图片合成分镜":
+            self.add_multi_input("图片")
+        else:
+            self.add_input("图片")
+
+        if not self.outputs:
+            self.add_output("图片")
+
+        if first_input_edges and self.inputs:
+            from core.node_editor.edge import Edge
+            scene = self.scene()
+            if scene:
+                if self.process_mode == "图片合成分镜":
+                    for start_socket in first_input_edges:
+                        edge = Edge(start_socket, self.inputs[0])
+                        scene.addItem(edge)
+                else:
+                    edge = Edge(first_input_edges[0], self.inputs[0])
+                    scene.addItem(edge)
+
+    def _setup_content(self):
+        layout = QVBoxLayout(self._content_widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(4)
+
+        combo_style = """
+            QComboBox {
+                background-color: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+                border-radius: 3px;
+                padding: 3px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                color: white;
+                selection-background-color: #4a4a4a;
+                border: 1px solid #444;
+            }
+            QComboBox::drop-down { border: none; }
+        """
+
+        spin_style = """
+            QSpinBox {
+                background-color: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+                border-radius: 3px;
+                padding: 3px;
+            }
+        """
+
+        mode_label = QLabel("处理模式:")
+        mode_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(mode_label)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(self.MODES)
+        self.mode_combo.setStyleSheet(combo_style)
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        layout.addWidget(self.mode_combo)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+
+        row_label = QLabel("行:")
+        row_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        grid.addWidget(row_label, 0, 0)
+
+        self.rows_spin = QSpinBox()
+        self.rows_spin.setRange(1, 9)
+        self.rows_spin.setValue(2)
+        self.rows_spin.setStyleSheet(spin_style)
+        self.rows_spin.valueChanged.connect(self._refresh_mode_hint)
+        grid.addWidget(self.rows_spin, 0, 1)
+
+        col_label = QLabel("列:")
+        col_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        grid.addWidget(col_label, 1, 0)
+
+        self.cols_spin = QSpinBox()
+        self.cols_spin.setRange(1, 9)
+        self.cols_spin.setValue(2)
+        self.cols_spin.setStyleSheet(spin_style)
+        self.cols_spin.valueChanged.connect(self._refresh_mode_hint)
+        grid.addWidget(self.cols_spin, 1, 1)
+
+        layout.addLayout(grid)
+
+        self.desc_label = QLabel()
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setStyleSheet("color: #777; font-size: 10px;")
+        layout.addWidget(self.desc_label)
+
+        self._refresh_mode_hint()
+
+    def _refresh_mode_hint(self):
+        total = self.rows_spin.value() * self.cols_spin.value()
+        if self.process_mode == "图片合成分镜":
+            self.desc_label.setText(f"多图输入，按 {self.rows_spin.value()}×{self.cols_spin.value()} 合成一张 4K 图片（最多使用 {total} 张）")
+        else:
+            self.desc_label.setText(f"单图输入，按 {self.rows_spin.value()}×{self.cols_spin.value()} 拆分为 {total} 张图片")
+
+    def _on_mode_changed(self, mode_text):
+        self.process_mode = mode_text
+        self._refresh_mode_hint()
+        if self._mode_initialized:
+            self._setup_sockets()
+            self.update_sockets_position()
+            self.update()
+
+    def get_params(self):
+        return {
+            "mode": self.process_mode,
+            "rows": self.rows_spin.value(),
+            "cols": self.cols_spin.value(),
+        }
+
+    def get_ordered_node_ids(self):
+        return self._image_order
+
+    def serialize_data(self):
+        return {
+            "process_mode": self.process_mode,
+            "rows": self.rows_spin.value(),
+            "cols": self.cols_spin.value(),
+            "image_order": self._image_order,
+        }
+
+    def deserialize_data(self, data):
+        mode = data.get("process_mode", "图片合成分镜")
+        idx = self.mode_combo.findText(mode)
+        if idx >= 0:
+            self.mode_combo.setCurrentIndex(idx)
+        self.rows_spin.setValue(data.get("rows", 2))
+        self.cols_spin.setValue(data.get("cols", 2))
+        self._image_order = data.get("image_order", [])
+        self._refresh_mode_hint()
 
 
 # =========================================================================== #
