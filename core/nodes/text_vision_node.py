@@ -19,7 +19,7 @@ class TextVisionNode(NodeItem):
     node_type = "text_vision"
     FORMAT_OPTIONS = ["无", "图片反推json", "json格式"]
     GPT_THINKING_OPTIONS = ["none", "low", "medium", "high", "xhigh"]
-    GEMINI_THINKING_OPTIONS = ["minimal", "low", "medium", "high"]
+    GEMINI_THINKING_OPTIONS = ["low", "medium", "high"]
     
     def __init__(self):
         self.generated_text = ""
@@ -203,7 +203,7 @@ class TextVisionNode(NodeItem):
         if current_mode in options:
             target_mode = current_mode
         else:
-            target_mode = "none" if model.startswith("gpt") else "minimal"
+            target_mode = "none" if model.startswith("gpt") else "low"
 
         self._thinking_mode = target_mode
         self.thinking_combo.setCurrentText(target_mode)
@@ -326,6 +326,8 @@ class TextVisionNode(NodeItem):
         self._update_thinking_options(self.model_combo.currentText(), preserve_current=False)
 
         thinking_mode = data.get("thinking_mode")
+        if thinking_mode == "minimal":
+            thinking_mode = "low"
         if thinking_mode in self.GPT_THINKING_OPTIONS + self.GEMINI_THINKING_OPTIONS:
             self._thinking_mode = thinking_mode
             self._update_thinking_options(self.model_combo.currentText())

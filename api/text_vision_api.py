@@ -159,7 +159,7 @@ class TextVisionAPI:
         image_paths: List[str],
         model: str,
         temperature: float = 0.8,
-        thinking_mode: str = "minimal",
+        thinking_mode: str = "low",
         format_mode: str = "无",
         is_stopped=None
     ) -> Optional[str]:
@@ -190,7 +190,7 @@ class TextVisionAPI:
         
         request_body = {
             "contents": [{"role": "user", "parts": parts}],
-            "thinking-level": thinking_mode or "minimal",
+            "thinking-level": "low" if thinking_mode == "minimal" else (thinking_mode or "low"),
             "generationConfig": {
                 "temperature": temperature,
                 "maxOutputTokens": 4096,
