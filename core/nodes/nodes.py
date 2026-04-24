@@ -1450,13 +1450,22 @@ class JimengAPINode(NodeItem):
 
 
 class GeminiAPINode(NodeItem):
-    """香蕉生图节点 — Gemini (Nano Banana) 图片生成
+    """生图节点，支持 Google Gemini 与 GPT 图片生成。
     
     单个橙色输入接口支持同时连接多个图片上传节点（最多14张参考图片）。
     输出为生成的图片，可连接到可灵/即梦生视频节点或视频输出节点。
     支持动态文本输入口，接收文本节点的输出。
     """
     node_type = "gemini_api"
+    GOOGLE_MODELS = [
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "gemini-2.5-flash-preview-image-generation",
+        "gemini-2.0-flash-preview-image-generation",
+    ]
+    GPT_MODELS = ["gpt-image-2"]
+    GOOGLE_RESOLUTIONS = ["1K", "2K", "4K"]
+    GPT_RESOLUTIONS = ["1K", "2K"]
     STYLE_OPTIONS = ["无", "简笔画生图", "简易草图转分镜", "图片转分镜"]
     STYLE_PROMPTS = {
         "简易草图转分镜": "将分镜草图完善为手绘风格分镜,黑白风格,线条清晰",
@@ -1606,7 +1615,7 @@ class GeminiAPINode(NodeItem):
         self._thumbnails_expanded = True
         self._syncing_selected_controls = False
         
-        super().__init__("香蕉生图")
+        super().__init__("生图")
         self.add_multi_input("参考图片")  # 橙色多连接输入
         self.add_output("图片")
         
@@ -1647,18 +1656,24 @@ class GeminiAPINode(NodeItem):
             }
         """
         
+        # ---- 厂商选择 ----
+        vendor_label = QLabel("厂商:")
+        vendor_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(vendor_label)
+
+        self.vendor_combo = QComboBox()
+        self.vendor_combo.addItem("google", "google")
+        self.vendor_combo.addItem("GPT", "gpt")
+        self.vendor_combo.setStyleSheet(_combo_style)
+        self.vendor_combo.currentTextChanged.connect(self._on_vendor_changed)
+        layout.addWidget(self.vendor_combo)
+
         # ---- 模型选择 ----
         model_label = QLabel("模型:")
         model_label.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(model_label)
         
         self.model_combo = QComboBox()
-        self.model_combo.addItems([
-            "gemini-3.1-flash-image-preview",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-preview-image-generation",
-            "gemini-2.0-flash-preview-image-generation",
-        ])
         self.model_combo.setStyleSheet(_combo_style)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         layout.addWidget(self.model_combo)
@@ -1765,7 +1780,6 @@ class GeminiAPINode(NodeItem):
         self.resolution_layout.addWidget(self.resolution_label)
         
         self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["1K", "2K", "4K"])
         self.resolution_combo.setStyleSheet("""
             QComboBox {
                 background-color: #2a2a2a;
@@ -1791,13 +1805,8 @@ class GeminiAPINode(NodeItem):
         """)
         self.resolution_layout.addWidget(self.resolution_combo)
         layout.addLayout(self.resolution_layout)
-        
-        # 默认选中 2K 分辨率
-        self.resolution_combo.setCurrentIndex(1)  # "2K"
-        
-        # 默认模型是 3.1 flash，显示分辨率选项
-        model_lower = self.model_combo.currentText().lower()
-        self._set_resolution_visible("pro" in model_lower or "3.1-flash" in model_lower)
+
+        self._refresh_vendor_controls(preferred_model=self.GOOGLE_MODELS[0], preferred_resolution="2K")
         
         # ---- 输入提示词接口按钮 ----
         self.text_input_btn = QPushButton("📝 输入提示词接口")
@@ -1879,12 +1888,54 @@ class GeminiAPINode(NodeItem):
         socket = self._text_input_socket
         # 定位到节点底部左侧
         socket.setPos(-socket.radius, self.height - 25)
+
+    def _current_vendor(self):
+        vendor = self.vendor_combo.currentData() if hasattr(self, 'vendor_combo') else "google"
+        return (vendor or "google").lower()
+
+    def _refresh_vendor_controls(self, preferred_model=None, preferred_resolution=None):
+        vendor = self._current_vendor()
+        model_options = self.GPT_MODELS if vendor == "gpt" else self.GOOGLE_MODELS
+        resolution_options = self.GPT_RESOLUTIONS if vendor == "gpt" else self.GOOGLE_RESOLUTIONS
+
+        current_model = preferred_model or self.model_combo.currentText()
+        current_resolution = preferred_resolution or self.resolution_combo.currentText() or "2K"
+
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItems(model_options)
+        model_to_set = current_model if current_model in model_options else model_options[0]
+        self.model_combo.setCurrentText(model_to_set)
+        self.model_combo.blockSignals(False)
+
+        self.resolution_combo.blockSignals(True)
+        self.resolution_combo.clear()
+        self.resolution_combo.addItems(resolution_options)
+        resolution_to_set = current_resolution if current_resolution in resolution_options else ("2K" if "2K" in resolution_options else resolution_options[0])
+        self.resolution_combo.setCurrentText(resolution_to_set)
+        self.resolution_combo.blockSignals(False)
+
+        self._sync_resolution_visibility()
+
+    def _sync_resolution_visibility(self):
+        vendor = self._current_vendor()
+        if vendor == "gpt":
+            self._set_resolution_visible(True)
+            return
+
+        model_name = self.model_combo.currentText()
+        is_pro = "pro" in model_name.lower() or "3.1-flash" in model_name.lower()
+        self._set_resolution_visible(is_pro)
+
+    def _on_vendor_changed(self, vendor_name):
+        self._refresh_vendor_controls()
+        self._update_size()
+        if not self._syncing_selected_controls:
+            self._sync_selected_combo("vendor_combo", vendor_name)
     
     def _on_model_changed(self, model_name):
         """模型切换时显示/隐藏分辨率选项"""
-        # Pro 模型和 3.1 flash 模型支持分辨率选项
-        is_pro = "pro" in model_name.lower() or "3.1-flash" in model_name.lower()
-        self._set_resolution_visible(is_pro)
+        self._sync_resolution_visibility()
         self._update_size()
         if not self._syncing_selected_controls:
             self._sync_selected_combo("model_combo", model_name)
@@ -1917,7 +1968,9 @@ class GeminiAPINode(NodeItem):
             combo.blockSignals(True)
             combo.setCurrentText(value)
             combo.blockSignals(False)
-            if combo_attr == "model_combo":
+            if combo_attr == "vendor_combo":
+                node._on_vendor_changed(value)
+            elif combo_attr == "model_combo":
                 node._on_model_changed(value)
             node._syncing_selected_controls = False
     
@@ -2007,15 +2060,15 @@ class GeminiAPINode(NodeItem):
     
     def get_params(self):
         params = {
+            "vendor": self._current_vendor(),
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
             "style": self.style_combo.currentText(),
             "aspect_ratio": self.aspect_ratio_combo.currentText(),
         }
-        # Pro 模型和 3.1 flash 模型传递分辨率（API 需要 "1K"/"2K"/"4K" 大写字符串）
         model_lower = params["model"].lower()
-        if "pro" in model_lower or "3.1-flash" in model_lower:
-            params["image_size"] = self.resolution_combo.currentText()  # "1K"/"2K"/"4K"
+        if params["vendor"] == "gpt" or "pro" in model_lower or "3.1-flash" in model_lower:
+            params["image_size"] = self.resolution_combo.currentText()
         return params
 
     def build_styled_prompt(self, prompt):
@@ -2034,6 +2087,7 @@ class GeminiAPINode(NodeItem):
     
     def serialize_data(self):
         return {
+            "vendor": self._current_vendor(),
             "prompt": self.prompt_edit.toPlainText(),
             "model": self.model_combo.currentText(),
             "style": self.style_combo.currentText(),
@@ -2046,6 +2100,25 @@ class GeminiAPINode(NodeItem):
     
     def deserialize_data(self, data):
         self.prompt_edit.setPlainText(data.get("prompt", ""))
+
+        vendor_val = str(data.get("vendor", "google") or "google").lower()
+        vendor_index = self.vendor_combo.findData(vendor_val)
+        if vendor_index >= 0:
+            self.vendor_combo.blockSignals(True)
+            self.vendor_combo.setCurrentIndex(vendor_index)
+            self.vendor_combo.blockSignals(False)
+
+        _res_compat = {
+            "1024 (1K)": "1K", "1024": "1K",
+            "2048 (2K)": "2K", "2048": "2K",
+            "4096 (4K)": "4K", "4096": "4K",
+        }
+        raw_res = data.get("resolution", "2K")
+        res_val = _res_compat.get(raw_res, raw_res)
+        self._refresh_vendor_controls(
+            preferred_model=data.get("model", ""),
+            preferred_resolution=res_val,
+        )
         
         model_index = self.model_combo.findText(data.get("model", ""))
         if model_index >= 0:
@@ -2059,14 +2132,6 @@ class GeminiAPINode(NodeItem):
         if ar_index >= 0:
             self.aspect_ratio_combo.setCurrentIndex(ar_index)
         
-        # 兼容旧格式 ("1024 (1K)"/"2048 (2K)"/"4096 (4K)"/"1024"/"2048"/"4096") 统一映射到新格式
-        _res_compat = {
-            "1024 (1K)": "1K", "1024": "1K",
-            "2048 (2K)": "2K", "2048": "2K",
-            "4096 (4K)": "4K", "4096": "4K",
-        }
-        raw_res = data.get("resolution", "2K")
-        res_val = _res_compat.get(raw_res, raw_res)  # 新格式直接透传
         res_index = self.resolution_combo.findText(res_val)
         if res_index >= 0:
             self.resolution_combo.setCurrentIndex(res_index)

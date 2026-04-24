@@ -33,6 +33,7 @@ from utils.file_utils import download_file, compress_image_if_needed, convert_vi
 from api.kling_api import KlingAPI
 from api.jimeng_api import JimengAPI
 from api.gemini_api import GeminiAPI
+from api.gpt_image_api import GPTImageAPI
 from api.veo3_api import Veo3API
 from resources.templates import get_template_list, get_template
 
@@ -533,23 +534,31 @@ class ExecuteThread(QThread):
         raise Exception(f"视频生成失败(已超时20分钟)")
     
     def _execute_gemini_node(self, node):
-        """执行香蕉生图（Gemini）节点，失败后最多重试3次"""
+        """执行生图节点，支持 Google/GPT 两种厂商，失败后最多重试3次"""
         self.progress.emit(f"正在执行: {node.title}")
         
         image_paths = self._get_gemini_input_images(node)
         
         image_paths = [compress_image_if_needed(p, 4.7) for p in image_paths] if image_paths else None
-        
-        keys = self.config.get_api_keys("gemini")
-        if not keys.get("api_key"):
-            raise Exception("请先配置 Gemini (香蕉模型) 的 API 密钥")
-        
-        api = GeminiAPI()
-        api.set_credentials(keys["api_key"], base_url=keys.get("base_url", ""))
-        api._on_rate_limit = lambda wait, msg, attempt, total: \
-            self.progress.emit(f"⏳ 并发限制，等待中...")
-        
+
         params = node.get_params()
+        vendor = params.get("vendor", "google")
+
+        if vendor == "gpt":
+            keys = self.config.get_api_keys("gpt52")
+            if not keys.get("api_key"):
+                raise Exception("请先配置 GPT 的 API 密钥")
+            api = GPTImageAPI()
+            api.set_credentials(keys["api_key"], base_url=keys.get("base_url", ""))
+        else:
+            keys = self.config.get_api_keys("gemini")
+            if not keys.get("api_key"):
+                raise Exception("请先配置 Gemini (香蕉模型) 的 API 密钥")
+            api = GeminiAPI()
+            api.set_credentials(keys["api_key"], base_url=keys.get("base_url", ""))
+            api._on_rate_limit = lambda wait, msg, attempt, total: \
+                self.progress.emit(f"⏳ 并发限制，等待中...")
+
         prompt = node.get_upper_text()
         if not prompt:
             prompt = params.get("prompt", "")
@@ -562,7 +571,7 @@ class ExecuteThread(QThread):
         timestamp = int(_time.time() * 1000)
         save_dir = self.project_manager.current_project_path / "素材库"
         save_dir.mkdir(exist_ok=True)
-        save_path = str(save_dir / f"gemini_{timestamp}.png")
+        save_path = str(save_dir / f"image_{vendor}_{timestamp}.png")
         
         max_retries = 3
         last_error = None
@@ -576,7 +585,7 @@ class ExecuteThread(QThread):
                 result_path = api.generate_image(
                     prompt=prompt,
                     image_paths=image_paths if image_paths else None,
-                    model=params.get("model", "gemini-2.5-flash-preview-image-generation"),
+                    model=params.get("model", "gpt-image-2" if vendor == "gpt" else "gemini-2.5-flash-preview-image-generation"),
                     aspect_ratio=params.get("aspect_ratio", "1:1"),
                     image_size=params.get("image_size", ""),
                     save_path=save_path,
@@ -1698,7 +1707,7 @@ class EditorWindow(QMainWindow):
 
         # 自动连线
         if source_type == 'output' and node.inputs:
-            # 检查是否是从文本显示节点拉线到 Veo 或香蕉生图节点
+            # 检查是否是从文本显示节点拉线到 Veo 或生图节点
             source_node = source_socket.node
             is_text_display_source = (hasattr(source_node, 'node_type') and 
                                       source_node.node_type in ('text_display', 'text_vision'))
@@ -2251,7 +2260,7 @@ class EditorWindow(QMainWindow):
                     elif src.node_type == "jimeng_api":
                         return "即梦生视频"
                     elif src.node_type == "gemini_api":
-                        return "香蕉生图"
+                        return "生图"
                     elif src.node_type == "veo_api":
                         return "Veo生视频"
                     elif src.node_type == "seedance2_api":

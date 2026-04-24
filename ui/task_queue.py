@@ -67,7 +67,7 @@ class TaskQueueManager(QObject):
         
         task_id:     唯一标识（一般用 output_node.id）
         output_name: 显示名称（输出节点名）
-        type_label:  类型描述（如 "可灵生视频" / "即梦生视频" / "香蕉生图"）
+        type_label:  类型描述（如 "可灵生视频" / "即梦生视频" / "生图"）
         thread:      ExecuteThread 实例
         """
         self._tasks[task_id] = {

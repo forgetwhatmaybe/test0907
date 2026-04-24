@@ -232,8 +232,8 @@ TEMPLATES = {
         }
     },
     "gemini_image_gen": {
-        "name": "香蕉生图",
-        "description": "Gemini 香蕉模型 · 参考图片生成新图片",
+        "name": "生图",
+        "description": "支持 Google/GPT 厂商的图片生成模板",
         "data": {
             "nodes": [
                 {
@@ -246,9 +246,10 @@ TEMPLATES = {
                 {
                     "id": "gemini_node_1",
                     "type": "gemini_api",
-                    "title": "香蕉生图",
+                    "title": "生图",
                     "pos": {"x": 380, "y": 150},
                     "data": {
+                        "vendor": "google",
                         "prompt": "",
                         "model": "gemini-3-pro-image-preview",
                         "aspect_ratio": "16:9",
