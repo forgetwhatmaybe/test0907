@@ -11,6 +11,44 @@ from .cache import ThumbnailCache
 from . import styles
 
 
+def collect_reference_items_from_inputs(inputs, excluded_socket=None):
+    """从输入 socket 中收集参考图片，优先按图片上传顺序排序。"""
+    connected_items = []
+    source_nodes = []
+
+    for socket in inputs:
+        if socket is excluded_socket:
+            continue
+        for edge in socket.edges:
+            if edge.start_socket:
+                src_node = edge.start_socket.node
+                img_path = ""
+                if src_node.node_type == "image":
+                    img_path = getattr(src_node, 'image_path', '')
+                elif src_node.node_type == "gemini_api":
+                    img_path = getattr(src_node, 'generated_image_path', '')
+                elif src_node.node_type == "output":
+                    img_path = getattr(src_node, 'video_path', '')
+                elif src_node.node_type == "image_edit":
+                    img_path = getattr(src_node, '_result_path', '')
+                elif src_node.node_type == "storyboard":
+                    img_path = getattr(src_node, '_result_path', '')
+
+                if img_path and Path(img_path).exists():
+                    source_nodes.append(src_node)
+                    connected_items.append((src_node.id, img_path, src_node))
+
+    if connected_items:
+        only_uploaded_images = all(
+            getattr(src_node, 'node_type', '') == 'image' and getattr(src_node, 'upload_order', 0) > 0
+            for src_node in source_nodes
+        )
+        if only_uploaded_images:
+            connected_items.sort(key=lambda item: getattr(item[2], 'upload_order', 0))
+
+    return [(node_id, img_path) for node_id, img_path, _ in connected_items]
+
+
 class ImagePreviewDialog(QDialog):
     """大图预览对话框"""
     

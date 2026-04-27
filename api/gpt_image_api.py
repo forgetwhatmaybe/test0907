@@ -13,6 +13,7 @@ class GPTImageAPI:
 
     BASE_URL = "https://api.vectorengine.ai"
     DEFAULT_MODEL = "gpt-image-2-all"
+    REQUEST_RETRY_TOTAL = 5
 
     def __init__(self):
         self.api_key = ""
@@ -22,7 +23,7 @@ class GPTImageAPI:
     def _create_retry_session(self):
         session = requests.Session()
         retry = Retry(
-            total=3,
+            total=self.REQUEST_RETRY_TOTAL,
             backoff_factor=2,
             status_forcelist=[500, 502, 503, 504],
         )
@@ -59,23 +60,26 @@ class GPTImageAPI:
         aspect_ratio: str = "1:1",
         image_size: str = "2K",
         save_path: str = "output.png",
+        timeout_seconds: int = 1200,
         is_stopped=None,
     ) -> Optional[str]:
         if is_stopped and is_stopped():
             return None
 
+        target_size = self._calculate_target_size(aspect_ratio, image_size)
+
         payload = {
-            "size": self._build_size(aspect_ratio, image_size),
+            "size": self._format_size(target_size),
             "prompt": self._build_prompt(prompt),
             "model": self._normalize_model(model),
             "n": 1,
         }
 
         if image_paths:
-            return self._edit_image(payload, image_paths, save_path, is_stopped)
-        return self._generate_image(payload, save_path, is_stopped)
+            return self._edit_image(payload, image_paths, save_path, target_size, timeout_seconds, is_stopped)
+        return self._generate_image(payload, save_path, target_size, timeout_seconds, is_stopped)
 
-    def _generate_image(self, payload: dict, save_path: str, is_stopped=None) -> Optional[str]:
+    def _generate_image(self, payload: dict, save_path: str, target_size, timeout_seconds, is_stopped=None) -> Optional[str]:
         url = f"{self._base_url}/v1/images/generations"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -83,17 +87,17 @@ class GPTImageAPI:
             "Accept": "application/json",
         }
 
-        resp = self._session.post(url, json=payload, headers=headers, timeout=(15, 180))
+        resp = self._session.post(url, json=payload, headers=headers, timeout=(15, timeout_seconds))
         if is_stopped and is_stopped():
             return None
         if resp.status_code != 200:
             raise Exception(f"GPT 生图失败 (HTTP {resp.status_code}): {self._safe_get_error_message(resp)}")
-        return self._extract_and_save_image(resp.json(), save_path)
+        return self._extract_and_save_image(resp.json(), save_path, target_size)
 
-    def _edit_image(self, payload: dict, image_paths: List[str], save_path: str, is_stopped=None) -> Optional[str]:
+    def _edit_image(self, payload: dict, image_paths: List[str], save_path: str, target_size, timeout_seconds, is_stopped=None) -> Optional[str]:
         valid_image_paths = [p for p in (image_paths or []) if p and Path(p).exists()]
         if not valid_image_paths:
-            return self._generate_image(payload, save_path, is_stopped)
+            return self._generate_image(payload, save_path, target_size, timeout_seconds, is_stopped)
 
         url = f"{self._base_url}/v1/images/edits"
         headers = {
@@ -122,7 +126,7 @@ class GPTImageAPI:
                 headers=headers,
                 data=payload,
                 files=files,
-                timeout=(15, 300),
+                timeout=(15, timeout_seconds),
             )
             if is_stopped and is_stopped():
                 return None
@@ -130,12 +134,12 @@ class GPTImageAPI:
             if response.status_code != 200:
                 raise Exception(f"GPT 图生图失败 (HTTP {response.status_code}): {self._safe_get_error_message(response)}")
 
-            return self._extract_and_save_image(response.json(), save_path)
+            return self._extract_and_save_image(response.json(), save_path, target_size)
         finally:
             for handle in file_handles:
                 handle.close()
 
-    def _extract_and_save_image(self, response_data: dict, save_path: str) -> Optional[str]:
+    def _extract_and_save_image(self, response_data: dict, save_path: str, target_size=None) -> Optional[str]:
         data = response_data.get("data") or []
         if not data:
             raise Exception("API 返回空结果")
@@ -147,7 +151,7 @@ class GPTImageAPI:
         if b64_data:
             image_bytes = base64.b64decode(b64_data)
         elif image_url:
-            image_resp = self._session.get(image_url, timeout=(15, 120))
+            image_resp = self._session.get(image_url, timeout=(15, 300))
             if image_resp.status_code != 200:
                 raise Exception(f"下载生成图片失败: HTTP {image_resp.status_code}")
             image_bytes = image_resp.content
@@ -158,6 +162,9 @@ class GPTImageAPI:
         save_path_obj.parent.mkdir(parents=True, exist_ok=True)
         with open(save_path_obj, "wb") as file:
             file.write(image_bytes)
+
+        if target_size:
+            self._normalize_saved_image_size(save_path_obj, target_size)
         return str(save_path_obj)
 
     def _build_prompt(self, prompt: str) -> str:
@@ -172,8 +179,19 @@ class GPTImageAPI:
             return self.DEFAULT_MODEL
         return model
 
-    def _build_size(self, aspect_ratio: str, image_size: str) -> str:
-        longest_edge = 1024 if str(image_size).upper() == "1K" else 2048
+    def _calculate_target_size(self, aspect_ratio: str, image_size: str):
+        size_text = str(image_size).strip().upper()
+        if size_text == "1K":
+            longest_edge = 1024
+        elif size_text == "2K":
+            longest_edge = 2048
+        elif size_text == "4K":
+            longest_edge = 4096
+        else:
+            try:
+                longest_edge = max(int(float(str(image_size).strip())), 1)
+            except Exception:
+                longest_edge = 2048
         ratio_text = (aspect_ratio or "1:1").strip()
         try:
             width_ratio, height_ratio = ratio_text.split(":", 1)
@@ -185,7 +203,31 @@ class GPTImageAPI:
         scale = longest_edge / max(width_ratio, height_ratio)
         width = max(int(round(width_ratio * scale)), 1)
         height = max(int(round(height_ratio * scale)), 1)
+        return width, height
+
+    def _format_size(self, target_size) -> str:
+        width, height = target_size
         return f"{width}x{height}"
+
+    def _normalize_saved_image_size(self, save_path: Path, target_size):
+        try:
+            from PIL import Image
+        except Exception:
+            return
+
+        target_width, target_height = target_size
+        try:
+            with Image.open(save_path) as img:
+                if img.size == (target_width, target_height):
+                    return
+
+                source = img.convert("RGBA") if img.mode not in ("RGB", "RGBA") else img.copy()
+                resized = source.resize((target_width, target_height), Image.LANCZOS)
+                if save_path.suffix.lower() in (".jpg", ".jpeg") and resized.mode == "RGBA":
+                    resized = resized.convert("RGB")
+                resized.save(save_path)
+        except Exception:
+            return
 
     def _get_mime_type(self, image_path: str) -> str:
         ext = Path(image_path).suffix.lower()

@@ -5,9 +5,9 @@ from PyQt5.QtWidgets import (
     QScrollArea, QToolButton
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
-from PyQt5.QtGui import QPixmap, QCursor, QStandardItem, QStandardItemModel, QColor, QIcon, QImage, QBrush
+from PyQt5.QtGui import QPixmap, QCursor, QStandardItem, QStandardItemModel, QColor, QIcon, QImage, QBrush, QIntValidator
 from core.node_editor.node_item import NodeItem
-from .widgets import ImageThumbnailStrip, DraggableThumbnail
+from .widgets import ImageThumbnailStrip, DraggableThumbnail, collect_reference_items_from_inputs
 from pathlib import Path
 import shutil
 import os
@@ -1465,7 +1465,7 @@ class GeminiAPINode(NodeItem):
     ]
     GPT_MODELS = ["gpt-image-2"]
     GOOGLE_RESOLUTIONS = ["1K", "2K", "4K"]
-    GPT_RESOLUTIONS = ["1K", "2K"]
+    GPT_RESOLUTIONS = ["1K", "2K", "4K", "自定义"]
     STYLE_OPTIONS = ["无", "简笔画生图", "简易草图转分镜", "图片转分镜"]
     STYLE_PROMPTS = {
         "简易草图转分镜": "将分镜草图完善为手绘风格分镜,黑白风格,线条清晰",
@@ -1803,8 +1803,24 @@ class GeminiAPINode(NodeItem):
                 margin-right: 3px;
             }
         """)
+        self.resolution_combo.currentTextChanged.connect(self._on_resolution_changed)
         self.resolution_layout.addWidget(self.resolution_combo)
         layout.addLayout(self.resolution_layout)
+
+        self.custom_resolution_edit = QLineEdit()
+        self.custom_resolution_edit.setPlaceholderText("自定义最长边，如 2560")
+        self.custom_resolution_edit.setValidator(QIntValidator(1, 16384, self.custom_resolution_edit))
+        self.custom_resolution_edit.setStyleSheet("""
+            QLineEdit {
+                background-color: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+                border-radius: 3px;
+                padding: 4px;
+            }
+        """)
+        self.custom_resolution_edit.textChanged.connect(self._on_custom_resolution_changed)
+        layout.addWidget(self.custom_resolution_edit)
 
         self._refresh_vendor_controls(preferred_model=self.GOOGLE_MODELS[0], preferred_resolution="2K")
         
@@ -1888,6 +1904,8 @@ class GeminiAPINode(NodeItem):
         socket = self._text_input_socket
         # 定位到节点底部左侧
         socket.setPos(-socket.radius, self.height - 25)
+        for edge in socket.edges:
+            edge.update_position()
 
     def _current_vendor(self):
         vendor = self.vendor_combo.currentData() if hasattr(self, 'vendor_combo') else "google"
@@ -1932,6 +1950,14 @@ class GeminiAPINode(NodeItem):
         self._update_size()
         if not self._syncing_selected_controls:
             self._sync_selected_combo("vendor_combo", vendor_name)
+
+    def _on_resolution_changed(self, value):
+        self._sync_resolution_visibility()
+        self._update_size()
+
+    def _on_custom_resolution_changed(self, value):
+        if self._current_vendor() == "gpt" and self.resolution_combo.currentText() == "自定义":
+            self._update_size()
     
     def _on_model_changed(self, model_name):
         """模型切换时显示/隐藏分辨率选项"""
@@ -1978,6 +2004,8 @@ class GeminiAPINode(NodeItem):
         """设置分辨率选择器的可见性"""
         self.resolution_label.setVisible(visible)
         self.resolution_combo.setVisible(visible)
+        show_custom = visible and self._current_vendor() == "gpt" and self.resolution_combo.currentText() == "自定义"
+        self.custom_resolution_edit.setVisible(show_custom)
     
     def _on_prompt_changed(self):
         doc = self.prompt_edit.document()
@@ -1986,6 +2014,10 @@ class GeminiAPINode(NodeItem):
         new_height = int(doc.size().height()) + 10
         self.prompt_edit.setMinimumHeight(max(40, new_height))
         self._update_size()
+
+    def _collect_connected_reference_items(self):
+        """收集当前参考图片，优先按图片上传顺序排列。"""
+        return collect_reference_items_from_inputs(self.inputs, excluded_socket=self._text_input_socket)
     
     def _on_edge_changed(self, edge=None):
         """输入边连接或断开时，刷新缩略图条"""
@@ -1993,25 +2025,8 @@ class GeminiAPINode(NodeItem):
     
     def _refresh_thumbnails(self):
         """从当前连接收集图片并更新缩略图条"""
-        connected_items = []
-        # 跳过文本输入口（如果存在），处理图片输入
-        start_idx = 1 if self._text_input_socket and len(self.inputs) > 1 else 0
-        for socket in self.inputs[start_idx:]:
-            for edge in socket.edges:
-                if edge.start_socket:
-                    src_node = edge.start_socket.node
-                    img_path = ""
-                    if src_node.node_type == "image":
-                        img_path = getattr(src_node, 'image_path', '')
-                    elif src_node.node_type == "gemini_api":
-                        img_path = getattr(src_node, 'generated_image_path', '')
-                    elif src_node.node_type == "output":
-                        img_path = getattr(src_node, 'video_path', '')
-                    elif src_node.node_type == "image_edit":
-                        img_path = getattr(src_node, '_result_path', '')
-                    if img_path and Path(img_path).exists():
-                        connected_items.append((src_node.id, img_path))
-        
+        connected_items = self._collect_connected_reference_items()
+
         self.thumbnail_strip.update_thumbnails(connected_items)
         has_images = len(connected_items) > 0
         self.thumb_label.setVisible(has_images and self._thumbnails_expanded)
@@ -2068,7 +2083,12 @@ class GeminiAPINode(NodeItem):
         }
         model_lower = params["model"].lower()
         if params["vendor"] == "gpt" or "pro" in model_lower or "3.1-flash" in model_lower:
-            params["image_size"] = self.resolution_combo.currentText()
+            image_size = self.resolution_combo.currentText()
+            if params["vendor"] == "gpt" and image_size == "自定义":
+                custom_value = (self.custom_resolution_edit.text() or "").strip()
+                params["image_size"] = custom_value or "2048"
+            else:
+                params["image_size"] = image_size
         return params
 
     def build_styled_prompt(self, prompt):
@@ -2093,6 +2113,7 @@ class GeminiAPINode(NodeItem):
             "style": self.style_combo.currentText(),
             "aspect_ratio": self.aspect_ratio_combo.currentText(),
             "resolution": self.resolution_combo.currentText(),
+            "custom_resolution": self.custom_resolution_edit.text().strip(),
             "generated_image_path": self.generated_image_path,
             "image_order": self.thumbnail_strip.get_ordered_node_ids(),
             "show_text_input": self._show_text_input,
@@ -2115,10 +2136,15 @@ class GeminiAPINode(NodeItem):
         }
         raw_res = data.get("resolution", "2K")
         res_val = _res_compat.get(raw_res, raw_res)
+        custom_resolution = str(data.get("custom_resolution", "") or "").strip()
+        if vendor_val == "gpt" and str(res_val).isdigit() and not custom_resolution:
+            custom_resolution = str(res_val)
+            res_val = "自定义"
         self._refresh_vendor_controls(
             preferred_model=data.get("model", ""),
             preferred_resolution=res_val,
         )
+        self.custom_resolution_edit.setText(custom_resolution)
         
         model_index = self.model_combo.findText(data.get("model", ""))
         if model_index >= 0:
@@ -2135,6 +2161,8 @@ class GeminiAPINode(NodeItem):
         res_index = self.resolution_combo.findText(res_val)
         if res_index >= 0:
             self.resolution_combo.setCurrentIndex(res_index)
+
+        self._sync_resolution_visibility()
         
         self.generated_image_path = data.get("generated_image_path", "")
         if self.generated_image_path and Path(self.generated_image_path).exists():
@@ -2628,8 +2656,9 @@ class VeoAPINode(NodeItem):
         first_input_edges = []
         if self.inputs:
             # 保存图片输入口的连线（跳过文本输入口）
-            start_idx = 1 if self._text_input_socket and len(self.inputs) > 1 else 0
-            for socket in self.inputs[start_idx:]:
+            for socket in self.inputs:
+                if socket is self._text_input_socket:
+                    continue
                 for edge in socket.edges[:]:
                     first_input_edges.append(edge.start_socket)
         
@@ -2852,6 +2881,8 @@ class VeoAPINode(NodeItem):
         socket = self._text_input_socket
         # 定位到节点底部左侧
         socket.setPos(-socket.radius, self.height - 25)
+        for edge in socket.edges:
+            edge.update_position()
     
     def _reposition_sockets(self):
         """重新定位所有socket"""

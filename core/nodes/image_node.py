@@ -20,11 +20,18 @@ from . import styles
 class ImageNode(BaseMediaNode):
     """图片上传节点 - 支持图片选择、蒙版绘制、拖拽导出"""
     node_type = "image"
+    _upload_order_counter = 0
+
+    @classmethod
+    def _next_upload_order(cls):
+        cls._upload_order_counter += 1
+        return cls._upload_order_counter
     
     def __init__(self):
         super().__init__("图片上传")
         self.image_path = ""
         self.mask_path = ""
+        self.upload_order = 0
         self._has_mask_output = False
         self.add_output("图片")
         self._update_size()
@@ -61,6 +68,7 @@ class ImageNode(BaseMediaNode):
     def load_image_file(self, file_path):
         """加载图片到节点（供拖拽上传调用）"""
         self.image_path = self.copy_to_material_library(file_path)
+        self.upload_order = self._next_upload_order()
         self._update_image_display()
         self._notify_downstream_thumbnail_refresh()
 
@@ -150,12 +158,14 @@ class ImageNode(BaseMediaNode):
         return {
             "image_path": self.image_path,
             "mask_path": self.mask_path,
+            "upload_order": self.upload_order,
             "has_mask_output": self._has_mask_output,
         }
     
     def deserialize_data(self, data):
         self.image_path = data.get("image_path", "")
         self.mask_path = data.get("mask_path", "")
+        self.upload_order = data.get("upload_order", 0)
         self._has_mask_output = data.get("has_mask_output", False)
         if self._has_mask_output and len(self.outputs) < 2:
             self.add_output("蒙版")

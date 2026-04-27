@@ -332,11 +332,16 @@ class ExecuteThread(QThread):
     
     def _get_gemini_input_images(self, node):
         """收集 Gemini 节点的输入图片（按用户排序顺序）"""
+        if getattr(node, 'node_type', '') == 'gemini_api' and hasattr(node, 'get_ordered_image_paths'):
+            ordered_paths = [path for path in node.get_ordered_image_paths() if path and Path(path).exists()]
+            if ordered_paths:
+                return ordered_paths[:14]
+
         # 获取用户排序后的节点ID顺序
         ordered_ids = node.get_ordered_node_ids()
         
         # 从连线中收集所有图片，构建 node_id -> path 映射
-        id_to_path = {}
+        connected_sources = []
         for socket in node.inputs:
             for edge in socket.edges:
                 if edge.start_socket:
@@ -353,7 +358,15 @@ class ExecuteThread(QThread):
                     elif src_node.node_type == "storyboard":
                         img_path = getattr(src_node, '_result_path', '')
                     if img_path and Path(img_path).exists():
-                        id_to_path[src_node.id] = img_path
+                        connected_sources.append((src_node, img_path))
+
+        if connected_sources and all(
+            getattr(src_node, 'node_type', '') == 'image' and getattr(src_node, 'upload_order', 0) > 0
+            for src_node, _ in connected_sources
+        ):
+            connected_sources.sort(key=lambda item: getattr(item[0], 'upload_order', 0))
+
+        id_to_path = {src_node.id: img_path for src_node, img_path in connected_sources}
         
         if not id_to_path:
             return []
@@ -365,7 +378,8 @@ class ExecuteThread(QThread):
                 result.append(id_to_path[nid])
         
         # 追加未在排序列表中的新图片
-        for nid, path in id_to_path.items():
+        for src_node, path in connected_sources:
+            nid = src_node.id
             if nid not in ordered_ids:
                 result.append(path)
         
@@ -534,7 +548,7 @@ class ExecuteThread(QThread):
         raise Exception(f"视频生成失败(已超时20分钟)")
     
     def _execute_gemini_node(self, node):
-        """执行生图节点，支持 Google/GPT 两种厂商，失败后最多重试3次"""
+        """执行生图节点，支持 Google/GPT 两种厂商，失败后最多重试5次"""
         self.progress.emit(f"正在执行: {node.title}")
         
         image_paths = self._get_gemini_input_images(node)
@@ -573,7 +587,7 @@ class ExecuteThread(QThread):
         save_dir.mkdir(exist_ok=True)
         save_path = str(save_dir / f"image_{vendor}_{timestamp}.png")
         
-        max_retries = 3
+        max_retries = 5
         last_error = None
         for attempt in range(1, max_retries + 1):
             if self.isInterruptionRequested():
@@ -589,6 +603,7 @@ class ExecuteThread(QThread):
                     aspect_ratio=params.get("aspect_ratio", "1:1"),
                     image_size=params.get("image_size", ""),
                     save_path=save_path,
+                    timeout_seconds=1200,
                     is_stopped=self.isInterruptionRequested
                 )
                 

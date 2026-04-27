@@ -3,10 +3,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
-from pathlib import Path
-
 from core.node_editor.node_item import NodeItem
-from core.nodes.widgets import ImageThumbnailStrip
+from core.nodes.widgets import ImageThumbnailStrip, collect_reference_items_from_inputs
 from core.nodes import styles
 
 
@@ -232,24 +230,7 @@ class TextVisionNode(NodeItem):
         QTimer.singleShot(0, self._refresh_thumbnails)
     
     def _refresh_thumbnails(self):
-        connected_items = []
-        for socket in self.inputs:
-            for edge in socket.edges:
-                if edge.start_socket:
-                    src_node = edge.start_socket.node
-                    img_path = ""
-                    if src_node.node_type == "image":
-                        img_path = getattr(src_node, 'image_path', '')
-                    elif src_node.node_type == "gemini_api":
-                        img_path = getattr(src_node, 'generated_image_path', '')
-                    elif src_node.node_type == "output":
-                        img_path = getattr(src_node, 'video_path', '')
-                    elif src_node.node_type == "image_edit":
-                        img_path = getattr(src_node, '_result_path', '')
-                    elif src_node.node_type == "storyboard":
-                        img_path = getattr(src_node, '_result_path', '')
-                    if img_path and Path(img_path).exists():
-                        connected_items.append((src_node.id, img_path))
+        connected_items = collect_reference_items_from_inputs(self.inputs)
         
         self.thumbnail_strip.update_thumbnails(connected_items)
         has_images = len(connected_items) > 0
@@ -276,7 +257,7 @@ class TextVisionNode(NodeItem):
         from api.text_vision_api import TextVisionAPI
         
         prompt = self.prompt_edit.toPlainText()
-        image_paths = self.thumbnail_strip.get_ordered_image_paths()
+        image_paths = self.get_ordered_image_paths()
         
         self._estimated_tokens = TextVisionAPI.estimate_tokens(prompt, image_paths)
         self.token_label.setText(f"预估Token: {self._estimated_tokens}")

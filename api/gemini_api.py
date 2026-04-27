@@ -15,8 +15,8 @@ class GeminiAPI:
     """
     
     BASE_URL = "https://api.vectorengine.ai/v1"
-    REQUEST_RETRY_TOTAL = 10
-    GENERATE_MAX_ATTEMPTS = 10
+    REQUEST_RETRY_TOTAL = 5
+    GENERATE_MAX_ATTEMPTS = 5
     
     def __init__(self):
         self.api_key = ""
@@ -77,6 +77,7 @@ class GeminiAPI:
                        aspect_ratio: str = "1:1",
                        image_size: str = "",
                        save_path: str = "output.png",
+                       timeout_seconds: int = 1200,
                        is_stopped=None) -> Optional[str]:
         """调用 Gemini 生成图片
         
@@ -141,18 +142,23 @@ class GeminiAPI:
         
         # ---- 发送请求（支持限流自动重试）----
         max_attempts = self.GENERATE_MAX_ATTEMPTS
+        started_at = time.time()
         for attempt in range(1, max_attempts + 1):
             if is_stopped and is_stopped():
                 return None
+
+            remaining_time = timeout_seconds - (time.time() - started_at)
+            if remaining_time <= 0:
+                raise Exception(f"图片生成等待超时(已超过{timeout_seconds // 60}分钟)")
             
             try:
                 resp = self._session.post(
                     url, json=request_body,
-                    timeout=(15, 900)  # 连接 15s，读取 900s（4K 图片生成可能较慢）
+                    timeout=(15, max(30, int(remaining_time)))
                 )
                 
                 if resp.status_code == 429:
-                    wait = 30 * attempt
+                    wait = min(30 * attempt, max(0, remaining_time))
                     msg = "请求过于频繁"
                     if self._on_rate_limit:
                         self._on_rate_limit(wait, msg, attempt, max_attempts)
@@ -172,7 +178,10 @@ class GeminiAPI:
                     requests.exceptions.ChunkedEncodingError,
                     requests.exceptions.ContentDecodingError) as e:
                 if attempt < max_attempts:
-                    wait = 5 * attempt
+                    remaining_time = timeout_seconds - (time.time() - started_at)
+                    if remaining_time <= 0:
+                        raise Exception(f"图片生成等待超时(已超过{timeout_seconds // 60}分钟)")
+                    wait = min(5 * attempt, max(0, remaining_time))
                     print(f"网络错误(第{attempt}次): {e}")
                     if self._interruptible_sleep(wait, is_stopped):
                         return None
