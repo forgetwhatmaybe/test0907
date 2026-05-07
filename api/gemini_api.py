@@ -1,4 +1,5 @@
 import time
+import json
 import base64
 import requests
 from pathlib import Path
@@ -14,7 +15,7 @@ class GeminiAPI:
     支持文生图、图生图，最多 14 张参考图片输入。
     """
     
-    BASE_URL = "https://api.vectorengine.ai/v1"
+    BASE_URL = "https://api.vectorengine.ai/v1beta"
     REQUEST_RETRY_TOTAL = 5
     GENERATE_MAX_ATTEMPTS = 5
     
@@ -133,12 +134,18 @@ class GeminiAPI:
             generation_config["imageConfig"] = image_config
         
         request_body = {
+            # "model": model,
             "contents": [{"parts": contents_parts}],
             "generationConfig": generation_config
         }
         
         url = f"{self._base_url}/models/{model}:generateContent?key={self.api_key}"
+
         print(f"[Gemini] 请求地址: {self._base_url}/models/{model}:generateContent?key=***")
+        print(
+            "[Gemini] 请求体(JSON预览):\n"
+            + json.dumps(self._build_debug_request_body(request_body), ensure_ascii=False, indent=2)
+        )
         
         # ---- 发送请求（支持限流自动重试）----
         max_attempts = self.GENERATE_MAX_ATTEMPTS
@@ -221,6 +228,17 @@ class GeminiAPI:
             return body[:300]
         except Exception:
             return body[:300]
+
+    def _build_debug_request_body(self, request_body: dict) -> dict:
+        """构建用于日志打印的请求体，避免完整 base64 过大。"""
+        debug_body = json.loads(json.dumps(request_body))
+        for content in debug_body.get("contents", []):
+            for part in content.get("parts", []):
+                inline_data = part.get("inlineData")
+                if inline_data and "data" in inline_data:
+                    raw_data = inline_data.get("data", "")
+                    inline_data["data"] = f"<base64 length={len(raw_data)}>"
+        return debug_body
     
     # ---- 工具方法 ----
     
