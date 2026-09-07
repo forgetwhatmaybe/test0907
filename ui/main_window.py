@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
                 widget = ProjectWidget(project_path)
                 widget.clicked.connect(lambda p=project_path, w=widget: self._on_project_clicked(p, w))
                 widget.delete_requested.connect(self._delete_project)
+                widget.rename_requested.connect(self._rename_project)
                 widget.icon_imported.connect(lambda p: self._load_projects())
                 self.projects_layout.addWidget(widget, row, col)
                 col += 1
@@ -293,6 +294,24 @@ class MainWindow(QMainWindow):
         """)
         self.statusBar().showMessage("就绪")
     
+    def _rename_project(self, project_path: str):
+        project_name = Path(project_path).name
+
+        new_name, ok = QInputDialog.getText(
+            self, "重命名项目",
+            f"将 '{project_name}' 重命名为：",
+            text=project_name
+        )
+        if not ok:
+            return
+
+        try:
+            new_path = self.project_manager.rename_project(project_path, new_name)
+            self._load_projects()
+            self.statusBar().showMessage(f"✅ 项目已重命名为 '{Path(new_path).name}'", 5000)
+        except Exception as e:
+            QMessageBox.warning(self, "重命名失败", str(e))
+
     def _delete_project(self, project_path: str):
         project_name = Path(project_path).name
         

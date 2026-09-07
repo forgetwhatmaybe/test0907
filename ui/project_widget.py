@@ -114,7 +114,11 @@ class ProjectWidget(QWidget):
         open_action = QAction("📂 打开项目", self)
         open_action.triggered.connect(lambda: self.clicked.emit(self.project_path))
         menu.addAction(open_action)
-        
+
+        rename_action = QAction("✏ 重命名项目", self)
+        rename_action.triggered.connect(lambda: self.rename_requested.emit(self.project_path))
+        menu.addAction(rename_action)
+
         icon_action = QAction("🖼 导入项目图标", self)
         icon_action.triggered.connect(self._import_project_icon)
         menu.addAction(icon_action)
