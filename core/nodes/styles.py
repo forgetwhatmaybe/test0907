@@ -110,6 +110,51 @@ IMAGE_LOADED = """
     }
 """
 
+# 单行输入框样式
+LINE_EDIT = """
+    QLineEdit {
+        background-color: #2a2a2a; color: white;
+        border: 1px solid #444; border-radius: 3px;
+        padding: 3px;
+    }
+"""
+
+# 视频/图片预览容器样式
+VIDEO_CONTAINER = """
+    QWidget {
+        background-color: #1a1a1a;
+        border: 2px solid #555;
+        border-radius: 5px;
+    }
+"""
+
+# 蓝色数值标签
+LABEL_VALUE_BLUE = "color: #4aa3ff; font-size: 11px; min-width: 30px;"
+
+# 蓝色滑块样式
+SLIDER_BLUE = """
+    QSlider::groove:horizontal {
+        background: #3a3a3a; height: 4px; border-radius: 2px;
+    }
+    QSlider::sub-page:horizontal {
+        background: #2196F3; border-radius: 2px;
+    }
+    QSlider::handle:horizontal {
+        background: #2196F3; width: 12px; margin: -4px 0; border-radius: 6px;
+    }
+"""
+
+# 警告提示文本
+WARNING_TEXT = "color: #FF9800; font-size: 11px;"
+
+# 图片缺失/加载失败样式
+IMAGE_MISSING = """
+    QLabel {
+        background-color: #2a2a2a; border: 2px solid #FF5722;
+        border-radius: 5px; color: #FF5722; font-size: 12px;
+    }
+"""
+
 # 缩略图样式
 THUMBNAIL = """
     QLabel {

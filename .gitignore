@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 本地工具/记忆目录与 git 重写残留（不入库）
+.workbuddy/
+.git-rewrite/
