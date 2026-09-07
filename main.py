@@ -7,6 +7,11 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
 from PyQt5.QtNetwork import QLocalSocket, QLocalServer
 from ui.main_window import MainWindow
+from core.nodes.nodes import OutputNode
+from core.nodes.output_upload import install_output_upload
+
+# 为输出节点注入图片上传能力（详见 core/nodes/output_upload.py）
+install_output_upload(OutputNode)
 
 
 def main():
