@@ -123,10 +123,6 @@ def _build_upload_area(self):
     if layout is None:
         return
 
-    title = QLabel("图片上传:")
-    title.setStyleSheet("color: #aaa; font-size: 11px;")
-    layout.addWidget(title)
-
     container = ImageDropZone(self.load_upload_image)
     container.setFixedSize(180, 100)
 
