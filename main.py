@@ -9,9 +9,14 @@ from PyQt5.QtNetwork import QLocalSocket, QLocalServer
 from ui.main_window import MainWindow
 from core.nodes.nodes import OutputNode
 from core.nodes.output_upload import install_output_upload
+from ui.editor_window import EditorWindow
+from core.node_editor.view_center import install_center_on_open
 
-# 为输出节点注入图片上传能力（详见 core/nodes/output_upload.py）
-install_output_upload(OutputNode)
+# 输出节点图片上传框（按需求临时下线：要恢复，取消下面这行注释即可）
+# install_output_upload(OutputNode)
+
+# 打开画布自动居中到所有节点中心
+install_center_on_open(EditorWindow)
 
 
 def main():

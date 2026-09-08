@@ -12,3 +12,6 @@ wheels/
 # 本地工具/记忆目录与 git 重写残留（不入库）
 .workbuddy/
 .git-rewrite/
+
+# kimi 只读审查隔离环境（含凭据，禁止入库）
+.kimi-review-home/

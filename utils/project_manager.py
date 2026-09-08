@@ -47,6 +47,27 @@ class ProjectManager:
             self.config.set_current_project(None)
             self.current_project_path = None
     
+    def import_project(self, project_path: str) -> str:
+        """导入已有项目文件夹到项目列表（不移动/复制文件，仅注册）
+
+        Args:
+            project_path: 项目文件夹路径（需包含 workflows 子目录）
+
+        Returns:
+            规范化后的项目路径
+
+        Raises:
+            FileNotFoundError: 目录不存在
+            ValueError: 目录缺少 workflows 子目录，不是有效项目结构
+        """
+        path = Path(project_path)
+        if not path.exists() or not path.is_dir():
+            raise FileNotFoundError(f"目录不存在: {path}")
+        if not (path / "workflows").is_dir():
+            raise ValueError("所选文件夹不是有效项目（缺少 workflows 子目录）")
+        self.config.add_project(str(path))
+        return str(path)
+
     def rename_project(self, project_path: str, new_name: str) -> str:
         """重命名项目（目录改名），并同步更新配置与工作流内的路径引用
 

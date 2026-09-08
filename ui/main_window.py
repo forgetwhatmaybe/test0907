@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea, QMenu,
     QToolBar, QAction, QLabel, QMessageBox, QFileDialog, QInputDialog
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
@@ -90,7 +90,11 @@ class MainWindow(QMainWindow):
         
         scroll_area.setWidget(self.projects_container)
         layout.addWidget(scroll_area)
-        
+
+        # 项目列表空白处右键 → 导入项目
+        self.projects_container.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.projects_container.customContextMenuRequested.connect(self._show_projects_area_menu)
+
         self.statusBar().setStyleSheet("""
             QStatusBar {
                 background-color: #1a1a1a;
@@ -311,6 +315,38 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"✅ 项目已重命名为 '{Path(new_path).name}'", 5000)
         except Exception as e:
             QMessageBox.warning(self, "重命名失败", str(e))
+
+    def _show_projects_area_menu(self, pos):
+        """项目列表空白处右键菜单：导入已有项目文件夹"""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #3a3a3a; color: white;
+                border: 1px solid #4a4a4a;
+            }
+            QMenu::item { padding: 6px 24px; border-radius: 3px; }
+            QMenu::item:selected { background-color: #4a4a4a; }
+        """)
+        import_action = QAction("📥 导入项目", self)
+        import_action.triggered.connect(self._import_project)
+        menu.addAction(import_action)
+        menu.exec_(self.projects_container.mapToGlobal(pos))
+
+    def _import_project(self):
+        """选择项目文件夹并导入到项目列表"""
+        start_dir = "D:/LC" if Path("D:/LC").exists() else str(Path.home())
+        project_path = QFileDialog.getExistingDirectory(
+            self, "选择要导入的项目文件夹", start_dir
+        )
+        if not project_path:
+            return
+
+        try:
+            path = self.project_manager.import_project(project_path)
+            self._load_projects()
+            QMessageBox.information(self, "成功", f"项目 '{Path(path).name}' 已导入")
+        except Exception as e:
+            QMessageBox.warning(self, "导入失败", str(e))
 
     def _delete_project(self, project_path: str):
         project_name = Path(project_path).name
